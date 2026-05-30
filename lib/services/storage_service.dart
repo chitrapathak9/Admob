@@ -1,0 +1,158 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+import '../models/player_config.dart';
+
+const kXmdsUrl = 'xmds_url';
+const kXmrUrl = 'xmr_url';
+const kCmsKey = 'cms_key';
+const kHardwareKey = 'hardware_key';
+const kDisplayName = 'display_name';
+const kUserCmsKey = 'user_cms_key';
+const kCollectionInterval = 'collection_interval';
+const kIsApproved = 'is_approved';
+const kCurrentLayoutId = 'current_layout_id';
+const kConfigJson = 'player_config_json';
+
+class StorageService {
+	StorageService._();
+	static final StorageService instance = StorageService._();
+
+	SharedPreferences? _prefs;
+
+	Future<SharedPreferences> get prefs async {
+		_prefs ??= await SharedPreferences.getInstance();
+		return _prefs!;
+	}
+
+	Future<void> saveConfig(PlayerConfig config) async {
+		final p = await prefs;
+		await p.setString(kXmdsUrl, config.xmdsUrl);
+		await p.setString(kXmrUrl, config.xmrUrl);
+		await p.setString(kCmsKey, config.cmsKey);
+		await p.setInt(kCollectionInterval, config.collectionInterval);
+		await p.setString(kConfigJson, jsonEncode(config.toJson()));
+	}
+
+	Future<PlayerConfig?> loadConfig() async {
+		final p = await prefs;
+		final jsonStr = p.getString(kConfigJson);
+		if (jsonStr != null) {
+			return PlayerConfig.fromJson(jsonDecode(jsonStr) as Map<String, dynamic>);
+		}
+		final xmds = p.getString(kXmdsUrl);
+		final cms = p.getString(kCmsKey);
+		if (xmds == null || cms == null) return null;
+		return PlayerConfig(
+			xmdsUrl: xmds,
+			xmrUrl: p.getString(kXmrUrl) ?? '',
+			cmsKey: cms,
+			version: '5',
+			collectionInterval: p.getInt(kCollectionInterval) ?? 60,
+		);
+	}
+
+	Future<String> getOrCreateHardwareKey() async {
+		final p = await prefs;
+		final existing = p.getString(kHardwareKey);
+		if (existing != null && existing.isNotEmpty) return existing;
+
+		String hardwareKey = '';
+		try {
+			final plugin = DeviceInfoPlugin();
+			if (!kIsWeb && Platform.isAndroid) {
+				hardwareKey = (await plugin.androidInfo).id;
+			} else if (!kIsWeb && Platform.isIOS) {
+				hardwareKey = (await plugin.iosInfo).identifierForVendor ?? '';
+			}
+		} catch (_) {}
+
+		if (hardwareKey.isEmpty || hardwareKey == 'unknown') {
+			hardwareKey = const Uuid().v4();
+		}
+
+		await p.setString(kHardwareKey, hardwareKey);
+		return hardwareKey;
+	}
+
+	Future<String?> loadHardwareKey() async {
+		final p = await prefs;
+		return p.getString(kHardwareKey);
+	}
+
+	Future<void> saveHardwareKey(String key) async {
+		final p = await prefs;
+		await p.setString(kHardwareKey, key);
+	}
+
+	Future<void> saveDisplayName(String name) async {
+		final p = await prefs;
+		await p.setString(kDisplayName, name);
+	}
+
+	Future<String?> loadDisplayName() async {
+		final p = await prefs;
+		return p.getString(kDisplayName);
+	}
+
+	Future<void> saveUserCmsKey(String key) async {
+		final p = await prefs;
+		await p.setString(kUserCmsKey, key);
+	}
+
+	Future<bool> isApproved() async {
+		final p = await prefs;
+		return p.getBool(kIsApproved) ?? false;
+	}
+
+	Future<void> setApproved(bool value) async {
+		final p = await prefs;
+		await p.setBool(kIsApproved, value);
+	}
+
+	Future<void> setCurrentLayoutId(String id) async {
+		final p = await prefs;
+		await p.setString(kCurrentLayoutId, id);
+	}
+
+	Future<String?> getCurrentLayoutId() async {
+		final p = await prefs;
+		return p.getString(kCurrentLayoutId);
+	}
+
+	Future<int> getCollectionInterval() async {
+		final p = await prefs;
+		return p.getInt(kCollectionInterval) ?? 60;
+	}
+
+	Future<String?> getCmsKey() async {
+		final p = await prefs;
+		return p.getString(kCmsKey);
+	}
+
+	Future<String?> getXmdsUrl() async {
+		final p = await prefs;
+		return p.getString(kXmdsUrl);
+	}
+
+	Future<String?> getXmrUrl() async {
+		final p = await prefs;
+		return p.getString(kXmrUrl);
+	}
+
+	Future<void> clearAll() async {
+		final p = await prefs;
+		final hardwareKey = p.getString(kHardwareKey);
+		await p.clear();
+		if (hardwareKey != null) {
+			await p.setString(kHardwareKey, hardwareKey);
+		}
+	}
+
+	Future<bool> hasConfig() async => (await loadConfig()) != null;
+}
