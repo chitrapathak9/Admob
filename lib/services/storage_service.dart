@@ -135,6 +135,12 @@ class StorageService {
 		return p.getString(kCmsKey);
 	}
 
+	/// Override the server/CMS key used by XMDS (optional setup field).
+	Future<void> setCmsKey(String key) async {
+		final p = await prefs;
+		await p.setString(kCmsKey, key);
+	}
+
 	Future<String?> getXmdsUrl() async {
 		final p = await prefs;
 		return p.getString(kXmdsUrl);

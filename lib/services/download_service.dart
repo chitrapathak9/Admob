@@ -3,10 +3,10 @@ import 'dart:math' show min;
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../config/app_config.dart';
+import '../core/logger.dart';
 import '../models/download_progress.dart';
 import '../models/required_file.dart';
 import '../models/schedule_item.dart';
@@ -67,9 +67,9 @@ class DownloadService {
 		if (shouldSkipPlaybackFile(file)) {
 			final ext = file.saveAs.contains('.') ? file.saveAs.split('.').last : file.saveAs;
 			if (_skipExtensions.contains(ext.toLowerCase())) {
-				debugPrint('[Download] Skipping font/JS: ${file.saveAs}');
+				PlayerLogger.log('DOWNLOAD', 'Skip font/JS: ${file.saveAs}');
 			} else {
-				debugPrint('[Download] Skipping default layout 1');
+				PlayerLogger.log('DOWNLOAD', 'Skip default layout 1');
 			}
 			return;
 		}
@@ -82,10 +82,10 @@ class DownloadService {
 			final bytes = await existing.readAsBytes();
 			final actualMd5 = md5.convert(bytes).toString();
 			if (actualMd5.toLowerCase() == file.md5.toLowerCase()) {
-				debugPrint('[Download] Already cached OK: ${file.saveAs}');
+				PlayerLogger.log('DOWNLOAD', 'Cached OK: ${file.saveAs}');
 				return;
 			}
-			debugPrint('[Download] MD5 mismatch — re-downloading: ${file.saveAs}');
+			PlayerLogger.log('DOWNLOAD', 'MD5 mismatch — re-downloading: ${file.saveAs}');
 		}
 
 		if (file.isHttpDownload && file.path.isNotEmpty) {
@@ -96,9 +96,9 @@ class DownloadService {
 	}
 
 	Future<void> _downloadViaHttp(RequiredFile file, String savePath) async {
-		debugPrint('[Download] HTTP: ${file.saveAs}');
-		final previewLen = file.path.length.clamp(0, 100);
-		debugPrint('[Download] URL: ${file.path.substring(0, previewLen)}...');
+		PlayerLogger.log('DOWNLOAD', 'HTTP: ${file.saveAs}', data: {
+			'url': file.path.substring(0, file.path.length.clamp(0, 100)),
+		});
 
 		try {
 			final response = await _http.get<List<int>>(file.path);
@@ -117,9 +117,9 @@ class DownloadService {
 			}
 
 			await File(savePath).writeAsBytes(bytes, flush: true);
-			debugPrint('[Download] Saved via HTTP: ${file.saveAs} (${bytes.length} bytes)');
-		} catch (e) {
-			debugPrint('[Download] HTTP failed: ${file.saveAs} → $e');
+			PlayerLogger.log('DOWNLOAD', 'HTTP OK: ${file.saveAs} (${bytes.length}B)');
+		} catch (e, st) {
+			PlayerLogger.error('DOWNLOAD', 'HTTP failed: ${file.saveAs}', e, st);
 			rethrow;
 		}
 	}
@@ -134,7 +134,11 @@ class DownloadService {
 		final allBytes = <int>[];
 		var isFirstChunk = logFirstResponse;
 
-		debugPrint('[Download] XMDS GetFile: ${file.saveAs} id=${file.id} type=${file.type}');
+		PlayerLogger.log('DOWNLOAD', 'XMDS GetFile: ${file.saveAs}', data: {
+			'id': file.id,
+			'type': file.type,
+			'size': file.size,
+		});
 
 		if (file.size > 0) {
 			while (offset < file.size) {
@@ -152,7 +156,7 @@ class DownloadService {
 
 				if (chunk.isEmpty) {
 					if (offset == 0) {
-						debugPrint('[Download] ERROR: empty base64 for ${file.saveAs}');
+						PlayerLogger.log('DOWNLOAD', 'ERROR: empty base64 chunk for ${file.saveAs}');
 					}
 					break;
 				}
@@ -191,13 +195,13 @@ class DownloadService {
 		}
 
 		await File(savePath).writeAsBytes(allBytes, flush: true);
-		debugPrint('[Download] Saved via GetFile: ${file.saveAs} (${allBytes.length} bytes)');
+		PlayerLogger.log('DOWNLOAD', 'XMDS GetFile OK: ${file.saveAs} (${allBytes.length}B)');
 	}
 
 	Future<List<RequiredFile>> downloadAllMissing(List<RequiredFile> requiredFiles) async {
 		final dir = await getApplicationDocumentsDirectory();
-		debugPrint('[Download] Storage path: ${dir.path}');
-		debugPrint('[Download] Total files in manifest: ${requiredFiles.length}');
+		PlayerLogger.log('DOWNLOAD', 'Storage path: ${dir.path}');
+		PlayerLogger.log('DOWNLOAD', 'Manifest total: ${requiredFiles.length}');
 
 		final failed = <RequiredFile>[];
 		final errors = <String, String>{};
@@ -214,7 +218,7 @@ class DownloadService {
 
 			try {
 				if (await fileExists(file.saveAs, file.md5)) {
-					debugPrint('[Download] Already present: ${file.saveAs}');
+					PlayerLogger.log('DOWNLOAD', 'Already present: ${file.saveAs}');
 					successCount++;
 					continue;
 				}
@@ -223,22 +227,20 @@ class DownloadService {
 				if (logRaw) loggedFirstGetFile = true;
 				await downloadFile(file, logFirstGetFile: logRaw);
 				successCount++;
-			} catch (e) {
+			} catch (e, st) {
 				failCount++;
 				failed.add(file);
 				errors[file.saveAs] = e.toString();
-				debugPrint('[Download] FAILED: ${file.saveAs} error: $e');
+				PlayerLogger.error('DOWNLOAD', 'FAILED: ${file.saveAs}', e, st);
 			}
 		}
 
-		debugPrint('[Download] === DOWNLOAD SUMMARY ===');
-		debugPrint('[Download] Manifest: ${requiredFiles.length}, skipped: $skipCount');
-		debugPrint('[Download] Successfully saved: $successCount');
-		debugPrint('[Download] Failed: $failCount');
-		for (final entry in errors.entries) {
-			debugPrint('[Download] FAILED: ${entry.key} error: ${entry.value}');
-		}
-
+		PlayerLogger.log('DOWNLOAD', 'Summary', data: {
+			'manifest': requiredFiles.length,
+			'skipped': skipCount,
+			'success': successCount,
+			'failed': failCount,
+		});
 		return failed;
 	}
 
@@ -383,41 +385,41 @@ class DownloadService {
 		if (scheduledLayouts.isEmpty) {
 			scheduledLayouts = RequiredFile.layoutIdsFromFiles(required);
 			if (scheduledLayouts.isNotEmpty) {
-				debugPrint('[Download] Layout IDs from RequiredFiles: $scheduledLayouts');
+				PlayerLogger.log('DOWNLOAD', 'Layout IDs from RequiredFiles: $scheduledLayouts');
 			}
 		}
 
 		if (scheduledLayouts.isEmpty) {
-			debugPrint('[Download] No scheduled content');
+			PlayerLogger.log('DOWNLOAD', 'No scheduled content');
 			return required;
 		}
 
-		debugPrint('[Download] syncContentForSchedule layouts: $scheduledLayouts');
+		PlayerLogger.log('DOWNLOAD', 'syncContentForSchedule layouts=$scheduledLayouts');
 
 		for (final layoutId in scheduledLayouts) {
 			final xlfName = '$layoutId.xlf';
 			final xlfFile = RequiredFile.findBySaveAs(required, xlfName);
 			if (xlfFile == null) {
-				debugPrint('[Download] XLF $xlfName not in RequiredFiles — skipping');
+				PlayerLogger.log('DOWNLOAD', 'XLF $xlfName not in RequiredFiles — skipping');
 				continue;
 			}
 			try {
 				await downloadFile(xlfFile);
-			} catch (e) {
-				debugPrint('[Download] XLF download failed $xlfName: $e');
+			} catch (e, st) {
+				PlayerLogger.error('DOWNLOAD', 'XLF download failed $xlfName', e, st);
 			}
 		}
 
 		for (final file in required) {
 			try {
 				await downloadFile(file);
-			} catch (e) {
-				debugPrint('[Download] Failed ${file.saveAs}: $e');
+			} catch (e, st) {
+				PlayerLogger.error('DOWNLOAD', 'Failed ${file.saveAs}', e, st);
 			}
 		}
 
 		required = await XmdsService.instance.getRequiredFiles();
-		debugPrint('[Download] RequiredFiles after sync: ${required.length}');
+		PlayerLogger.log('DOWNLOAD', 'RequiredFiles after sync: ${required.length}');
 		return required;
 	}
 }

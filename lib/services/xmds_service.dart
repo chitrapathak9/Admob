@@ -2,10 +2,10 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:xml/xml.dart';
 
 import '../config/app_config.dart';
+import '../core/logger.dart';
 import '../models/required_file.dart';
 import '../models/schedule_item.dart';
 import '../utils/device_name.dart';
@@ -267,15 +267,17 @@ class XmdsService {
 		final files = RequiredFile.fromXmlDocument(doc);
 		final unescapedPreview = doc.toXmlString(pretty: false);
 		final rfEnd = unescapedPreview.length > 200 ? 200 : unescapedPreview.length;
-		debugPrint('[XMDS] Unescaped requiredFiles XML: ${unescapedPreview.substring(0, rfEnd)}');
-		debugPrint('[XMDS] Required files count: ${files.length}');
+		PlayerLogger.log('XMDS', 'RequiredFiles XML preview', data: {
+			'preview': unescapedPreview.substring(0, rfEnd),
+		});
+		PlayerLogger.log('XMDS', 'RequiredFiles count=${files.length}');
 		final byType = <String, int>{};
 		for (final f in files) {
 			byType[f.type] = (byType[f.type] ?? 0) + 1;
 		}
-		debugPrint('[XMDS] Required files by type: $byType');
+		PlayerLogger.log('XMDS', 'RequiredFiles by type', data: {'byType': byType.toString()});
 		for (final f in files.where((f) => f.type == 'layout' || f.saveAs.endsWith('.xlf'))) {
-			debugPrint('[XMDS] Layout entry: id=${f.id} saveAs=${f.saveAs} download=${f.download}');
+			PlayerLogger.log('XMDS', 'Layout entry id=${f.id} saveAs=${f.saveAs} download=${f.download}');
 		}
 		return files;
 	}
@@ -290,9 +292,9 @@ class XmdsService {
 
 		var base64String = fileEl.innerText.trim().replaceAll(RegExp(r'\s+'), '');
 		if (log) {
-			debugPrint('[Download] Base64 length: ${base64String.length}');
+			PlayerLogger.log('DOWNLOAD', 'GetFile base64 length=${base64String.length}');
 			if (base64String.isEmpty) {
-				debugPrint('[Download] ERROR: empty base64 in GetFile response');
+				PlayerLogger.log('DOWNLOAD', 'ERROR: empty base64 in GetFile response');
 			}
 		}
 		if (base64String.isEmpty) {
@@ -324,12 +326,12 @@ class XmdsService {
 		final raw = await _callRaw('GetFile', body);
 		if (logResponse) {
 			final end = raw.length > 300 ? 300 : raw.length;
-			debugPrint('[Download] GetFile raw response (first 300): ${raw.substring(0, end)}');
+			PlayerLogger.log('DOWNLOAD', 'GetFile raw preview', data: {'preview': raw.substring(0, end)});
 		}
 
 		final bytes = decodeGetFileResponse(raw, log: logResponse);
 		if (logResponse) {
-			debugPrint('[Download] Base64 decoded bytes: ${bytes.length}');
+			PlayerLogger.log('DOWNLOAD', 'GetFile decoded bytes=${bytes.length}');
 		}
 		return bytes;
 	}
@@ -350,13 +352,14 @@ class XmdsService {
 		final raw = await _callRaw('Schedule', body);
 		const wrappers = ['ScheduleXml', 'scheduledXml', 'Schedule'];
 		final unescapedSchedule = extractUnescapedSoapInner(raw, wrapperNames: wrappers);
-		debugPrint('[XLF] Unescaped schedule: $unescapedSchedule');
+		PlayerLogger.log('XMDS', 'GetSchedule unescaped', data: {
+			'preview': unescapedSchedule.substring(0, unescapedSchedule.length.clamp(0, 300)),
+		});
 
 		final doc = XmlDocument.parse(unescapedSchedule);
 		final schedule = ScheduleItem.fromXmlDocument(doc);
 		final layoutFileIds = ScheduleItem.layoutFileIdsFromDocument(doc);
-		debugPrint('[XLF] Layout file IDs from schedule: $layoutFileIds');
-		debugPrint('[XMDS] Layout count after fix: ${layoutFileIds.length}');
+		PlayerLogger.log('XMDS', 'GetSchedule layoutFileIds=$layoutFileIds count=${layoutFileIds.length}');
 		return ScheduleResult(
 			schedule: schedule,
 			defaultLayoutId: ScheduleItem.parseDefaultLayoutId(doc),

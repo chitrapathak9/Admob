@@ -1,8 +1,8 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:xml/xml.dart';
 
+import '../core/logger.dart';
 import '../models/download_progress.dart';
 import '../models/play_item.dart';
 import '../models/required_file.dart';
@@ -62,7 +62,7 @@ class XlfParser {
 		}
 
 		if (layoutIds.isEmpty) {
-			debugPrint('[XLF] No layout ids from schedule or default');
+			PlayerLogger.log('XLF', 'No layout ids from schedule or default');
 			final progress = await DownloadService.instance.computeDownloadProgress(requiredFiles);
 			return PlaylistBuildResult(
 				playlist: [],
@@ -73,18 +73,18 @@ class XlfParser {
 			);
 		}
 
-		debugPrint('[XLF] Layout file IDs to parse: $layoutIds');
+		PlayerLogger.log('XLF', 'Layout file IDs to parse: $layoutIds');
 
 		final playlist = <PlayItem>[];
 		final primaryLayoutId = layoutIds.first;
 
 		for (final layoutId in layoutIds) {
-			debugPrint('[XLF] Parsing layout: $layoutId');
+			PlayerLogger.log('XLF', 'Parsing layout: $layoutId');
 
 			final xlfPath = await _resolveXlfLocalPath(layoutId, requiredFiles);
-			debugPrint('[XLF] Looking for local file: $xlfPath');
+			PlayerLogger.log('XLF', 'Looking for local file: $xlfPath');
 			final xlfExists = await File(xlfPath).exists();
-			debugPrint('[XLF] File exists: $xlfExists');
+			PlayerLogger.log('XLF', 'File exists=$xlfExists');
 
 			final scheduleId = scheduleByLayout[layoutId]?.scheduleId ?? 0;
 			List<PlayItem> layoutItems;
@@ -106,17 +106,17 @@ class XlfParser {
 			}
 
 			playlist.addAll(layoutItems);
-			debugPrint('[XLF] Items from layout $layoutId: ${layoutItems.length}');
+			PlayerLogger.log('XLF', 'Items from layout $layoutId: ${layoutItems.length}');
 		}
 
 		final progress = await DownloadService.instance.computeDownloadProgress(requiredFiles);
 
 		if (playlist.isEmpty) {
-			debugPrint('[XLF] XLF playlist empty — fallback from RequiredFiles media on disk');
+			PlayerLogger.log('XLF', 'XLF playlist empty — fallback from RequiredFiles media on disk');
 			playlist.addAll(await _buildFallbackPlaylistFromRequired(requiredFiles: requiredFiles));
 		}
 
-		debugPrint('[XLF] Total playlist items: ${playlist.length}');
+		PlayerLogger.log('XLF', 'Total playlist items: ${playlist.length}');
 		return PlaylistBuildResult(
 			playlist: playlist,
 			layoutId: primaryLayoutId,
@@ -156,7 +156,7 @@ class XlfParser {
 
 		final doc = XmlDocument.parse(content);
 		final mediaElements = doc.findAllElements('media').toList();
-		debugPrint('[XLF] Media elements in layout $layoutId: ${mediaElements.length}');
+		PlayerLogger.log('XLF', 'Media elements in layout $layoutId: ${mediaElements.length}');
 
 		final items = <PlayItem>[];
 		final appDir = await DownloadService.instance.getAppStorageDir();
@@ -167,7 +167,7 @@ class XlfParser {
 			final uriPreview = _resolveMediaFilename(media, requiredFiles, mediaId) ?? '';
 
 			if (!_isPlayableMedia(rawType, uriPreview)) {
-				debugPrint('[XLF] Skipping non-playable type: $rawType uri=$uriPreview');
+				PlayerLogger.log('XLF', 'Skip non-playable type=$rawType uri=$uriPreview');
 				continue;
 			}
 
@@ -184,13 +184,13 @@ class XlfParser {
 
 			final localPath = '${appDir.path}/$uri';
 			final exists = await File(localPath).exists();
-			debugPrint('[XLF] Layout $layoutId → $uri exists=$exists');
+			PlayerLogger.log('XLF', 'Layout $layoutId → $uri exists=$exists');
 			if (!exists) {
-				debugPrint('[XLF] File missing locally: $uri — skipping');
+				PlayerLogger.log('XLF', 'File missing locally: $uri — skipping');
 				continue;
 			}
 
-			debugPrint('[XLF] Added to playlist: $uri');
+			PlayerLogger.log('XLF', 'Added to playlist: $uri');
 
 			items.add(PlayItem(
 				localPath: localPath,
@@ -210,30 +210,54 @@ class XlfParser {
 		List<RequiredFile> requiredFiles,
 		String mediaId,
 	) {
-		final uriEl = media.findAllElements('uri').firstOrNull;
-		var uri = uriEl?.innerText.trim() ?? '';
+		// ── Method 1: <options><uri>filename</uri></options> ─────────────────────
+		for (final opts in media.findElements('options')) {
+			for (final uriEl in opts.findElements('uri')) {
+				final text = uriEl.innerText.trim();
+				if (text.isNotEmpty) {
+					// Resolve against RequiredFiles if possible.
+					final match = requiredFiles.where(
+						(f) => f.type == 'media' && (f.saveAs == text || f.id == mediaId),
+					);
+					for (final f in match) {
+						if (f.saveAs.isNotEmpty) return f.saveAs;
+					}
+					return text;
+				}
+			}
+		}
 
-		if (uri.isEmpty) {
-			final fileAttr = media.getAttribute('file')?.trim() ?? '';
-			if (fileAttr.isNotEmpty) {
+		// ── Method 2: <uri> direct child ────────────────────────────────────────
+		for (final uriEl in media.findElements('uri')) {
+			final text = uriEl.innerText.trim();
+			if (text.isNotEmpty) {
 				final match = requiredFiles.where(
-					(f) => f.type == 'media' && f.id == fileAttr,
+					(f) => f.type == 'media' && (f.saveAs == text || f.id == mediaId),
 				);
 				for (final f in match) {
 					if (f.saveAs.isNotEmpty) return f.saveAs;
 				}
-				uri = fileAttr;
+				return text;
 			}
-		} else {
+		}
+
+		// ── Method 3: file attribute ─────────────────────────────────────────────
+		final fileAttr = media.getAttribute('file')?.trim() ?? '';
+		if (fileAttr.isNotEmpty) {
 			final match = requiredFiles.where(
-				(f) => f.type == 'media' && (f.saveAs == uri || f.id == mediaId),
+				(f) => f.type == 'media' && f.id == fileAttr,
 			);
 			for (final f in match) {
 				if (f.saveAs.isNotEmpty) return f.saveAs;
 			}
+			return fileAttr;
 		}
 
-		return uri.isEmpty ? null : uri;
+		// ── Method 4: src attribute ──────────────────────────────────────────────
+		final srcAttr = media.getAttribute('src')?.trim() ?? '';
+		if (srcAttr.isNotEmpty) return srcAttr;
+
+		return null;
 	}
 
 	bool _isPlayableMedia(String rawType, String uri) {
@@ -278,7 +302,7 @@ class XlfParser {
 				? 'video'
 				: 'image';
 
-			debugPrint('[XLF] Fallback playlist: ${f.saveAs}');
+			PlayerLogger.log('XLF', 'Fallback playlist item: ${f.saveAs}');
 			items.add(PlayItem(
 				localPath: localPath,
 				type: type,
@@ -315,7 +339,7 @@ class XlfParser {
 				? 'video'
 				: 'image';
 
-			debugPrint('[XLF] Native playlist item: $saveAs (id=$mediaId)');
+			PlayerLogger.log('XLF', 'Native playlist item: $saveAs (id=$mediaId)');
 			items.add(PlayItem(
 				localPath: localPath,
 				type: type,

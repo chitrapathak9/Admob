@@ -6,7 +6,13 @@ import android.content.Intent
 
 class BootReceiver : BroadcastReceiver() {
 	override fun onReceive(context: Context, intent: Intent?) {
-		if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+		val action = intent?.action
+		// Some Android TV / tablet firmwares emit QUICKBOOT_POWERON instead of
+		// (or in addition to) BOOT_COMPLETED on a fast/warm boot.
+		if (action != Intent.ACTION_BOOT_COMPLETED &&
+			action != "android.intent.action.QUICKBOOT_POWERON") {
+			return
+		}
 		val launch = Intent(context, MainActivity::class.java).apply {
 			addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 		}

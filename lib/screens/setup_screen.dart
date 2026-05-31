@@ -1,172 +1,133 @@
 import 'package:flutter/material.dart';
 
-import '../config/app_config.dart';
-import '../services/config_service.dart';
-import '../services/storage_service.dart';
-import '../services/xmds_service.dart';
-import '../utils/device_name.dart';
+import '../config/app_constants.dart';
+import '../core/player_controller.dart';
 import '../widgets/adaptive_padding.dart';
 import '../widgets/theadbook_logo.dart';
-import 'waiting_screen.dart';
 
+/// Setup screen (Phase F2.7). Dumb: collects Display Name + CMS Key and calls
+/// `controller.configure(...)`. CMS URL is never shown — always backendBase.
+/// Loading + error state are read from the controller.
 class SetupScreen extends StatefulWidget {
-	const SetupScreen({super.key});
+  final PlayerController controller;
+  const SetupScreen({super.key, required this.controller});
 
-	@override
-	State<SetupScreen> createState() => _SetupScreenState();
+  @override
+  State<SetupScreen> createState() => _SetupScreenState();
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-	final _cmsKeyController = TextEditingController();
-	final _screenNameController = TextEditingController();
-	bool _loading = false;
-	String? _error;
+  final _cmsKeyController = TextEditingController();
+  final _nameController = TextEditingController();
 
-	@override
-	void initState() {
-		super.initState();
-		_loadDeviceName();
-	}
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill device model as the default display name.
+    _nameController.text = widget.controller.displayName;
+  }
 
-	Future<void> _loadDeviceName() async {
-		_screenNameController.text = await defaultDisplayName();
-	}
+  @override
+  void dispose() {
+    _cmsKeyController.dispose();
+    _nameController.dispose();
+    super.dispose();
+  }
 
-	@override
-	void dispose() {
-		_cmsKeyController.dispose();
-		_screenNameController.dispose();
-		super.dispose();
-	}
+  void _connect() {
+    FocusScope.of(context).unfocus();
+    widget.controller.configure(_nameController.text, _cmsKeyController.text);
+  }
 
-	Future<void> _connect() async {
-		final cmsKey = _cmsKeyController.text.trim();
-		final screenName = _screenNameController.text.trim();
+  @override
+  Widget build(BuildContext context) {
+    final padding = adaptiveScreenPadding(context);
+    final logoHeight = adaptiveLogoHeight(context, large: 100, small: 72);
+    final titleSize = adaptiveTitleSize(context);
 
-		if (cmsKey.isEmpty || screenName.isEmpty) {
-			setState(() => _error = 'Please enter CMS Key and Screen Name');
-			return;
-		}
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final busy = widget.controller.isBusy;
+        final error = widget.controller.errorMessage;
+        return Scaffold(
+          backgroundColor: AppConstants.background,
+          resizeToAvoidBottomInset: true,
+          body: SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: padding,
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TheadbookLogo(height: logoHeight),
+                      const SizedBox(height: 32),
+                      Text(
+                        'Connect this screen to theadbook',
+                        style: TextStyle(color: Colors.white, fontSize: titleSize),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 40),
+                      _field(label: 'Display Name', controller: _nameController),
+                      const SizedBox(height: 20),
+                      _field(label: 'CMS Key', controller: _cmsKeyController),
+                      if (error != null) ...[
+                        const SizedBox(height: 16),
+                        Text(
+                          error,
+                          style: const TextStyle(color: Colors.redAccent),
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                      const SizedBox(height: 32),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: ElevatedButton(
+                          onPressed: busy ? null : _connect,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppConstants.accentOrange,
+                            foregroundColor: Colors.black,
+                          ),
+                          child: busy
+                              ? const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Connect', style: TextStyle(fontSize: 18)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-		setState(() {
-			_loading = true;
-			_error = null;
-		});
-
-		try {
-			final config = await ConfigService.instance.fetchConfig();
-			if (config.cmsKey != cmsKey) {
-				throw Exception('CMS Key does not match server configuration');
-			}
-
-			await StorageService.instance.saveUserCmsKey(cmsKey);
-			await StorageService.instance.saveDisplayName(screenName);
-			await StorageService.instance.getOrCreateHardwareKey();
-
-			await XmdsService.instance.registerDisplay(screenName);
-
-			if (!mounted) return;
-			Navigator.of(context).pushReplacement(
-				MaterialPageRoute<void>(builder: (_) => const WaitingScreen()),
-			);
-		} catch (e) {
-			if (mounted) {
-				setState(() {
-					_error = e.toString().replaceFirst('Exception: ', '');
-					_loading = false;
-				});
-			}
-		}
-	}
-
-	@override
-	Widget build(BuildContext context) {
-		final padding = adaptiveScreenPadding(context);
-		final logoHeight = adaptiveLogoHeight(context, large: 100, small: 72);
-		final titleSize = adaptiveTitleSize(context);
-
-		return Scaffold(
-			backgroundColor: AppConfig.background,
-			resizeToAvoidBottomInset: true,
-			body: SafeArea(
-				child: Center(
-					child: SingleChildScrollView(
-						padding: padding,
-						keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-						child: ConstrainedBox(
-							constraints: const BoxConstraints(maxWidth: 520),
-							child: Column(
-								mainAxisAlignment: MainAxisAlignment.center,
-								children: [
-									TheadbookLogo(height: logoHeight),
-									const SizedBox(height: 32),
-									Text(
-										'Connect this screen to theadbook',
-										style: TextStyle(color: Colors.white, fontSize: titleSize),
-										textAlign: TextAlign.center,
-									),
-									const SizedBox(height: 40),
-									_buildField(
-										label: 'CMS Key',
-										controller: _cmsKeyController,
-									),
-									const SizedBox(height: 20),
-									_buildField(
-										label: 'Screen Name',
-										controller: _screenNameController,
-									),
-									if (_error != null) ...[
-										const SizedBox(height: 16),
-										Text(
-											_error!,
-											style: const TextStyle(color: Colors.redAccent),
-											textAlign: TextAlign.center,
-										),
-									],
-									const SizedBox(height: 32),
-									SizedBox(
-										width: double.infinity,
-										height: 52,
-										child: ElevatedButton(
-											onPressed: _loading ? null : _connect,
-											style: ElevatedButton.styleFrom(
-												backgroundColor: AppConfig.accentOrange,
-												foregroundColor: Colors.black,
-											),
-											child: _loading
-												? const SizedBox(
-													width: 24,
-													height: 24,
-													child: CircularProgressIndicator(strokeWidth: 2),
-												)
-												: const Text('Connect Screen', style: TextStyle(fontSize: 18)),
-										),
-									),
-								],
-							),
-						),
-					),
-				),
-			),
-		);
-	}
-
-	Widget _buildField({required String label, required TextEditingController controller}) {
-		return TextField(
-			controller: controller,
-			style: const TextStyle(color: Colors.white),
-			decoration: InputDecoration(
-				labelText: label,
-				labelStyle: const TextStyle(color: Colors.white54),
-				enabledBorder: OutlineInputBorder(
-					borderSide: BorderSide(color: Colors.white24),
-					borderRadius: BorderRadius.circular(8),
-				),
-				focusedBorder: OutlineInputBorder(
-					borderSide: BorderSide(color: AppConfig.accentOrange),
-					borderRadius: BorderRadius.circular(8),
-				),
-			),
-		);
-	}
+  Widget _field({required String label, required TextEditingController controller}) {
+    return TextField(
+      controller: controller,
+      style: const TextStyle(color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white54),
+        enabledBorder: OutlineInputBorder(
+          borderSide: const BorderSide(color: Colors.white24),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderSide: const BorderSide(color: AppConstants.accentOrange),
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+    );
+  }
 }
