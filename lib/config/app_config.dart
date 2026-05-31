@@ -1,18 +1,23 @@
 import 'package:flutter/material.dart' show Color;
 
-class AppConfig {
-  static const String baseUrl = 'https://xibo-be.yourpreview.space';
-  static const String configPath = '/api/v1/player/config';
-  static const String healthPath = '/api/v1/player/health';
-  static const String xmdsVersion = '5';
-  static const String clientType = 'flutter';
-  static const String clientVersion = '1.0.0';
-  static const String clientCode = '100';
-  static const int chunkSize = 512000;
-  static const int heartbeatIntervalSeconds = 30;
-  static const int splashDelaySeconds = 2;
-  static const int xmrPingIntervalSeconds = 60;
+import 'app_constants.dart';
 
-  static const Color background = Color(0xFF000000);
-  static const Color accentOrange = Color(0xFFFF8C00);
+/// Backward-compatibility shim. [AppConstants] is the canonical source of truth
+/// (Phase F2.1); existing services reference [AppConfig], so it now delegates to
+/// [AppConstants] to keep a single set of values.
+class AppConfig {
+  static const String baseUrl = AppConstants.backendBase;
+  static const String configPath = AppConstants.configPath;
+  static const String healthPath = AppConstants.healthPath;
+  static const String xmdsVersion = AppConstants.xmdsVersion;
+  static const String clientType = AppConstants.clientType;
+  static const String clientVersion = AppConstants.clientVersion;
+  static const String clientCode = AppConstants.clientCode;
+  static const int chunkSize = AppConstants.chunkSize;
+  static const int heartbeatIntervalSeconds = AppConstants.heartbeatSeconds;
+  static const int splashDelaySeconds = AppConstants.splashDelaySeconds;
+  static const int xmrPingIntervalSeconds = AppConstants.xmrPingSeconds;
+
+  static const Color background = AppConstants.background;
+  static const Color accentOrange = AppConstants.accentOrange;
 }

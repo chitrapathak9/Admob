@@ -1,30 +1,36 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
-import 'config/app_config.dart';
-import 'screens/splash_screen.dart';
+import 'app.dart';
+import 'core/logger.dart';
 
 void main() {
-	WidgetsFlutterBinding.ensureInitialized();
-	runApp(const TheadbookPlayerApp());
-}
+  WidgetsFlutterBinding.ensureInitialized();
 
-class TheadbookPlayerApp extends StatelessWidget {
-	const TheadbookPlayerApp({super.key});
+  // Catch all Flutter framework errors and log them (Phase F2.9).
+  FlutterError.onError = (details) {
+    PlayerLogger.error(
+      'FLUTTER',
+      details.exceptionAsString(),
+      details.exception,
+      details.stack,
+    );
+  };
 
-	@override
-	Widget build(BuildContext context) {
-		return MaterialApp(
-			title: 'theadbook Player',
-			debugShowCheckedModeBanner: false,
-			theme: ThemeData(
-				brightness: Brightness.dark,
-				scaffoldBackgroundColor: AppConfig.background,
-				colorScheme: const ColorScheme.dark(
-					surface: AppConfig.background,
-					primary: AppConfig.accentOrange,
-				),
-			),
-			home: const SplashScreen(),
-		);
-	}
+  // Catch all async/platform errors so the player never dies silently.
+  WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+    PlayerLogger.error('PLATFORM', error.toString(), error, stack);
+    return true;
+  };
+
+  // Full immersive kiosk mode + landscape + keep screen on.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  SystemChrome.setPreferredOrientations(const [
+    DeviceOrientation.landscapeLeft,
+    DeviceOrientation.landscapeRight,
+  ]);
+  WakelockPlus.enable();
+
+  runApp(const TheadbookPlayerApp());
 }
