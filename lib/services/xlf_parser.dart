@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:xml/xml.dart';
 
 import '../core/logger.dart';
@@ -351,13 +352,5 @@ class XlfParser {
 		}
 
 		return items;
-	}
-}
-
-extension _XmlFirstOrNull on Iterable<XmlElement> {
-	XmlElement? get firstOrNull {
-		final it = iterator;
-		if (!it.moveNext()) return null;
-		return it.current;
 	}
 }

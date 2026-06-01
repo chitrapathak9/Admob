@@ -15,7 +15,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:keepScreenOn="true"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="fullSensor"
             android:resizeableActivity="true"
             android:taskAffinity=""
             android:theme="@style/LaunchTheme"

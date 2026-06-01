@@ -24,12 +24,8 @@ void main() {
     return true;
   };
 
-  // Full immersive kiosk mode + landscape + keep screen on.
+  // Full immersive kiosk mode + keep screen on (orientation follows device).
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-  SystemChrome.setPreferredOrientations(const [
-    DeviceOrientation.landscapeLeft,
-    DeviceOrientation.landscapeRight,
-  ]);
   WakelockPlus.enable();
 
   runApp(const TheadbookPlayerApp());
