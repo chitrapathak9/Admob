@@ -5,6 +5,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config/app_constants.dart';
 import '../models/play_item.dart';
+import '../services/approval_sse_service.dart';
 import '../services/collection_service.dart';
 import '../services/config_service.dart';
 import '../services/diagnostics_service.dart';
@@ -59,6 +60,13 @@ class PlayerController extends ChangeNotifier {
   Timer? _heartbeatTimer;
   Timer? _statusPollTimer;
   Timer? _errorTimer;
+
+  // ── SSE approval stream ─────────────────────────────────────────────────────
+  StreamSubscription<ApprovalSseEvent>? _sseEventSub;
+  StreamSubscription<SseConnectionState>? _sseStateSub;
+
+  /// Exposed to WaitingScreen so it can show a live/polling indicator.
+  SseConnectionState get sseState => ApprovalSseService.instance.connectionState;
 
   // ── UI getters ──────────────────────────────────────────────────────────────
   PlayItem? get currentItem {
@@ -201,31 +209,78 @@ class PlayerController extends ChangeNotifier {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // WAITING — poll status every 15s
+  // WAITING — SSE primary (instant) + 60s poll fallback
   // ══════════════════════════════════════════════════════════════════════════
 
+  /// Starts watching for admin approval.
+  ///
+  /// PRIMARY: subscribes to the SSE stream so the transition to [syncing]
+  /// fires the moment the admin approves — no polling lag.
+  ///
+  /// FALLBACK: a 60 s timer calls the REST status endpoint. This covers:
+  ///   • Environments where long-lived SSE connections are blocked.
+  ///   • Race: approval happened between SSE connect and open.
   void _startStatusPoll() {
-    _statusPollTimer?.cancel();
-    PlayerLogger.log('PLAYER', 'Polling status every ${AppConstants.statusPollIntervalSeconds}s');
+    _cancelApprovalWatch(); // defensive cancel
+
+    // ── SSE: connect and subscribe ───────────────────────────────────────────
+    ApprovalSseService.instance.connect(_hardwareKey);
+
+    _sseEventSub = ApprovalSseService.instance.events.listen((event) {
+      if (event.isApproved && _state == PlayerState.waiting) {
+        PlayerLogger.log('SSE', 'Received approved event → transitioning');
+        unawaited(_onApproved(reason: 'SSE approved event'));
+      } else if ((event.isExpired || event.isTimeout) && _state == PlayerState.waiting) {
+        PlayerLogger.log('SSE', 'Received ${event.type} event');
+        // Don't error out — server may have timed out the SSE stream but the
+        // display can still be approved. The fallback poll keeps watching.
+      }
+    });
+
+    // Re-notify UI whenever SSE connection state changes so the indicator updates.
+    _sseStateSub = ApprovalSseService.instance.stateChanges.listen((_) {
+      notifyListeners();
+    });
+
+    // ── Fallback poll ────────────────────────────────────────────────────────
+    PlayerLogger.log('PLAYER', 'Starting fallback poll every ${AppConstants.statusPollIntervalSeconds}s');
     _statusPollTimer = Timer.periodic(
       const Duration(seconds: AppConstants.statusPollIntervalSeconds),
-      (_) => _pollStatus(),
+      (_) => _fallbackPollStatus(),
     );
   }
 
-  Future<void> _pollStatus() async {
+  Future<void> _fallbackPollStatus() async {
+    if (_state != PlayerState.waiting) return; // guard: may have already transitioned
     final status = await DiagnosticsService.instance.checkStatus(_hardwareKey);
-    PlayerLogger.log('PLAYER', 'status=${status.status}');
+    PlayerLogger.log('PLAYER', 'fallback poll status=${status.status}');
     if (status.isActive) {
-      await StorageService.instance.setApproved(true);
-      _statusPollTimer?.cancel();
-      _statusPollTimer = null;
-      _errorCount = 0;
-      transition(PlayerState.syncing, reason: 'admin approved');
-      _startTimers();
-      await runCollectionCycle();
+      unawaited(_onApproved(reason: 'fallback poll active'));
     }
-    // pending / not_found / error → keep polling
+  }
+
+  /// Single entry-point for "display is now approved" — called from both the
+  /// SSE listener and the fallback poll so the logic is never duplicated.
+  Future<void> _onApproved({required String reason}) async {
+    if (_state != PlayerState.waiting) return; // idempotent guard
+    PlayerLogger.log('PLAYER', '_onApproved: $reason');
+
+    await StorageService.instance.setApproved(true);
+    _cancelApprovalWatch();
+    _errorCount = 0;
+    transition(PlayerState.syncing, reason: reason);
+    _startTimers();
+    await runCollectionCycle();
+  }
+
+  void _cancelApprovalWatch() {
+    _sseEventSub?.cancel();
+    _sseStateSub?.cancel();
+    _sseEventSub  = null;
+    _sseStateSub  = null;
+    _statusPollTimer?.cancel();
+    _statusPollTimer = null;
+    ApprovalSseService.instance.disconnect();
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -443,14 +498,21 @@ class PlayerController extends ChangeNotifier {
     _statusPollTimer?.cancel();
     _errorTimer?.cancel();
     _collectionTimer = null;
-    _heartbeatTimer = null;
+    _heartbeatTimer  = null;
     _statusPollTimer = null;
-    _errorTimer = null;
+    _errorTimer      = null;
+    // Also cancel any in-flight approval watch
+    _sseEventSub?.cancel();
+    _sseStateSub?.cancel();
+    _sseEventSub = null;
+    _sseStateSub = null;
+    ApprovalSseService.instance.disconnect();
   }
 
   @override
   void dispose() {
     _stopTimers();
+    ApprovalSseService.instance.dispose();
     unawaited(XmrService.instance.dispose());
     super.dispose();
   }

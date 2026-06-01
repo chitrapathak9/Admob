@@ -7,8 +7,9 @@ class AppConstants {
   static const String backendBase = 'https://xibo-be.yourpreview.space';
   static const String configPath = '/api/v1/player/config';
   static const String healthPath = '/api/v1/player/health';
-  static const String statusPath = '/api/v1/player/status'; // + /:hardwareKey
-  static const String diagnosticsPath = '/api/v1/player/diagnostics'; // + /:hardwareKey
+  static const String statusPath       = '/api/v1/player/status';       // + /:hardwareKey
+  static const String approvalStreamPath = '/api/v1/player/approval-stream'; // + /:hardwareKey
+  static const String diagnosticsPath  = '/api/v1/player/diagnostics';  // + /:hardwareKey
 
   // ── XMDS client identity ────────────────────────────────────────────────────
   static const String xmdsVersion = '5';
@@ -17,7 +18,7 @@ class AppConstants {
   static const String clientCode = '100';
 
   // ── Timing ──────────────────────────────────────────────────────────────────
-  static const int statusPollIntervalSeconds = 15;
+  static const int statusPollIntervalSeconds = 60; // fallback poll; SSE is primary
   static const int scheduleRefreshSeconds = 60;
   static const int heartbeatSeconds = 30;
   static const int xmrPingSeconds = 60;
