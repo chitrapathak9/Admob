@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
+import '../models/screen_status_data.dart';
+import '../services/screen_service.dart';
 import '../services/storage_service.dart';
-import '../services/xmds_service.dart';
+import '../utils/app_logger.dart';
 import '../widgets/adaptive_padding.dart';
 import '../widgets/theadbook_logo.dart';
 import 'player_screen.dart';
@@ -20,6 +22,7 @@ class WaitingScreen extends StatefulWidget {
 class _WaitingScreenState extends State<WaitingScreen> {
 	Timer? _pollTimer;
 	String _hardwareKey = '';
+	String _statusMessage = 'Waiting for admin approval…';
 	String? _error;
 	bool _polling = false;
 
@@ -39,44 +42,41 @@ class _WaitingScreenState extends State<WaitingScreen> {
 			return;
 		}
 
-		await _pollRegisterDisplay();
+		await _pollStatus();
 		_startPollTimer();
 	}
 
-	void _startPollTimer() async {
-		final interval = await StorageService.instance.getCollectionInterval();
+	void _startPollTimer() {
 		_pollTimer?.cancel();
-		_pollTimer = Timer.periodic(Duration(seconds: interval), (_) => _pollRegisterDisplay());
+		_pollTimer = Timer.periodic(
+			const Duration(seconds: AppConfig.screenStatusPollSeconds),
+			(_) => _pollStatus(),
+		);
 	}
 
-	/// Polls XMDS RegisterDisplay using serverKey, hardwareKey, displayName from SharedPreferences.
-	Future<void> _pollRegisterDisplay() async {
+	Future<void> _pollStatus() async {
 		if (_polling) return;
 		_polling = true;
 
 		try {
 			final storage = StorageService.instance;
-			final serverKey = await storage.getCmsKey();
 			final hardwareKey = await storage.loadHardwareKey();
-			final displayName = await storage.loadDisplayName();
-
-			if (serverKey == null ||
-				serverKey.isEmpty ||
-				hardwareKey == null ||
-				hardwareKey.isEmpty ||
-				displayName == null ||
-				displayName.isEmpty) {
+			if (hardwareKey == null || hardwareKey.isEmpty) {
+				AppLogger.status('Poll skipped — hardware key missing');
 				if (mounted) {
 					setState(() => _error = 'Missing registration data. Use Reconfigure.');
 				}
 				return;
 			}
 
-			// XmdsService RegisterDisplay uses the same SharedPreferences values for SOAP body.
-			final result = await XmdsService.instance.registerDisplay(displayName);
+			AppLogger.status('Polling status for hardwareKey=$hardwareKey');
+			final status = await ScreenService.instance.getStatus(hardwareKey);
 			if (!mounted) return;
 
-			if (result.code == 201) {
+			await storage.saveRegistrationStatus(status.status);
+
+			if (status.isApproved) {
+				AppLogger.status('Approved — navigating to PlayerScreen');
 				_pollTimer?.cancel();
 				await storage.setApproved(true);
 				if (!mounted) return;
@@ -86,22 +86,71 @@ class _WaitingScreenState extends State<WaitingScreen> {
 				return;
 			}
 
-			if (result.code == 200) {
-				setState(() => _error = null);
+			if (status.isExpired) {
+				AppLogger.status('Expired — stopping poll');
+				_pollTimer?.cancel();
+				setState(() {
+					_statusMessage = status.message;
+					_error = 'Registration expired. Reconnect to register again.';
+				});
+				return;
+			}
+
+			if (status.isPending) {
+				AppLogger.status('Status pending — re-calling connect');
+				final displayName = await storage.loadDisplayName();
+				if (displayName != null && displayName.isNotEmpty) {
+					try {
+						final reconnect = await ScreenService.instance.connect(
+							hardwareKey: hardwareKey,
+							deviceName: displayName,
+						);
+						await storage.saveConnectResult(reconnect);
+						if (reconnect.status == 'approved') {
+							_pollTimer?.cancel();
+							await storage.setApproved(true);
+							if (!mounted) return;
+							Navigator.of(context).pushReplacement(
+								MaterialPageRoute<void>(builder: (_) => const PlayerScreen()),
+							);
+							return;
+						}
+					} catch (_) {}
+				}
+			}
+
+			if (status.isProcessing) {
+				setState(() {
+					_statusMessage = _messageForStatus(status);
+					_error = null;
+				});
 				return;
 			}
 
 			setState(() {
-				_error = result.message.isNotEmpty
-					? result.message
-					: 'Unexpected response (code ${result.code}). Retrying…';
+				_statusMessage = _messageForStatus(status);
+				_error = null;
 			});
-		} catch (_) {
+		} catch (e, st) {
+			AppLogger.status('Poll failed: $e');
+			debugPrint('[Status] stack: $st');
 			if (mounted) {
 				setState(() => _error = 'Connection failed. Retrying…');
 			}
 		} finally {
 			_polling = false;
+		}
+	}
+
+	String _messageForStatus(ScreenStatusData status) {
+		if (status.message.isNotEmpty) return status.message;
+		switch (status.status) {
+			case 'pending':
+				return 'Registration request received — completing setup…';
+			case 'processing':
+				return 'Waiting for admin approval…';
+			default:
+				return 'Waiting for admin approval…';
 		}
 	}
 
@@ -141,9 +190,9 @@ class _WaitingScreenState extends State<WaitingScreen> {
 										const SizedBox(height: 40),
 										const CircularProgressIndicator(color: AppConfig.accentOrange),
 										const SizedBox(height: 24),
-										const Text(
-											'Waiting for admin approval…',
-											style: TextStyle(color: Colors.white, fontSize: 20),
+										Text(
+											_statusMessage,
+											style: const TextStyle(color: Colors.white, fontSize: 20),
 											textAlign: TextAlign.center,
 										),
 										const SizedBox(height: 32),
@@ -164,7 +213,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 										),
 										if (_error != null) ...[
 											const SizedBox(height: 16),
-											Text(_error!, style: const TextStyle(color: Colors.white38)),
+											Text(_error!, style: const TextStyle(color: Colors.white38), textAlign: TextAlign.center),
 										],
 										const SizedBox(height: 48),
 										TextButton(

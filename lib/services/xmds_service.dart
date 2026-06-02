@@ -2,12 +2,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:xml/xml.dart';
 
 import '../config/app_config.dart';
 import '../models/required_file.dart';
 import '../models/schedule_item.dart';
+import '../utils/app_logger.dart';
+import '../utils/api_log_interceptor.dart';
 import '../utils/device_name.dart';
 import 'storage_service.dart';
 
@@ -35,7 +36,7 @@ class XmdsService {
 		headers: {
 			'Content-Type': 'text/xml; charset=utf-8',
 		},
-	));
+	))..interceptors.add(ApiLogInterceptor());
 
 	Future<String> _xmdsUrl() async {
 		final url = await StorageService.instance.getXmdsUrl();
@@ -67,7 +68,9 @@ class XmdsService {
 		final endpoint = '$url?v=${AppConfig.xmdsVersion}&method=$method';
 		final envelope = _envelope(methodBody);
 
-		// Xibo returns SOAP faults with HTTP 500 — read body instead of throwing.
+		AppLogger.xmds('→ POST $endpoint');
+		AppLogger.xmds('  SOAP method=$method body: ${AppLogger.sanitizeBody(methodBody)}');
+
 		final options = Options(
 			headers: {'SOAPAction': 'urn:xmds#$method'},
 			responseType: ResponseType.plain,
@@ -75,23 +78,38 @@ class XmdsService {
 		);
 
 		String body;
+		int? httpStatus;
 		try {
 			final response = await _dio.post<String>(endpoint, data: envelope, options: options);
+			httpStatus = response.statusCode;
 			body = response.data ?? '';
-		} on DioException catch (e) {
+		} on DioException catch (e, st) {
+			httpStatus = e.response?.statusCode;
 			body = e.response?.data?.toString() ?? '';
+			AppLogger.apiError('XMDS', 'method=$method http=$httpStatus failed', e, st);
 			if (body.isEmpty) {
 				throw Exception('XMDS $method failed: ${e.message}');
 			}
 		}
 
 		if (body.isEmpty) {
+			AppLogger.apiError('XMDS', 'method=$method returned empty response');
 			throw Exception('XMDS $method returned empty response');
 		}
+
+		if (method == 'GetFile') {
+			AppLogger.xmds('← HTTP $httpStatus method=$method response=${body.length} chars (base64 omitted)');
+		} else {
+			AppLogger.xmds('← HTTP $httpStatus method=$method response: ${AppLogger.truncate(body)}');
+		}
+
 		if (RegExp(r'<([^:>]+:)?Fault[\s>]', caseSensitive: false).hasMatch(body)) {
 			final fault = _extractText(body, 'faultstring') ?? 'SOAP fault';
+			AppLogger.apiError('XMDS', 'method=$method SOAP fault: $fault');
 			throw Exception(fault);
 		}
+
+		AppLogger.xmds('OK method=$method');
 		return body;
 	}
 
@@ -232,12 +250,11 @@ class XmdsService {
 	}
 
 	Future<RegisterDisplayResult> registerDisplay(String displayName) async {
-		final serverKey = await _serverKey();
-		final hardwareKey = await _hardwareKey();
+		AppLogger.register('registerDisplay displayName="$displayName"');
 
 		final body = '''<tns:RegisterDisplay>
-      <serverKey>$serverKey</serverKey>
-      <hardwareKey>$hardwareKey</hardwareKey>
+      <serverKey>${await _serverKey()}</serverKey>
+      <hardwareKey>${await _hardwareKey()}</hardwareKey>
       <displayName>${_escapeXml(displayName)}</displayName>
       <clientType>${AppConfig.clientType}</clientType>
       <clientVersion>${AppConfig.clientVersion}</clientVersion>
@@ -246,11 +263,20 @@ class XmdsService {
       <macAddress></macAddress>
     </tns:RegisterDisplay>''';
 
-		final raw = await _callRaw('RegisterDisplay', body);
-		return _parseRegisterDisplayResponse(raw);
+		try {
+			final raw = await _callRaw('RegisterDisplay', body);
+			final result = _parseRegisterDisplayResponse(raw);
+			AppLogger.register('OK code=${result.code} message="${result.message}"');
+			return result;
+		} catch (e, st) {
+			AppLogger.registerError('registerDisplay failed', e, st);
+			rethrow;
+		}
 	}
 
 	Future<List<RequiredFile>> getRequiredFiles() async {
+		AppLogger.xmds('getRequiredFiles');
+
 		final serverKey = await _serverKey();
 		final hardwareKey = await _hardwareKey();
 
@@ -265,18 +291,11 @@ class XmdsService {
 			wrapperNames: ['RequiredFilesXml', 'requiredFilesXml', 'RequiredFiles'],
 		);
 		final files = RequiredFile.fromXmlDocument(doc);
-		final unescapedPreview = doc.toXmlString(pretty: false);
-		final rfEnd = unescapedPreview.length > 200 ? 200 : unescapedPreview.length;
-		debugPrint('[XMDS] Unescaped requiredFiles XML: ${unescapedPreview.substring(0, rfEnd)}');
-		debugPrint('[XMDS] Required files count: ${files.length}');
 		final byType = <String, int>{};
 		for (final f in files) {
 			byType[f.type] = (byType[f.type] ?? 0) + 1;
 		}
-		debugPrint('[XMDS] Required files by type: $byType');
-		for (final f in files.where((f) => f.type == 'layout' || f.saveAs.endsWith('.xlf'))) {
-			debugPrint('[XMDS] Layout entry: id=${f.id} saveAs=${f.saveAs} download=${f.download}');
-		}
+		AppLogger.xmds('getRequiredFiles OK count=${files.length} byType=$byType');
 		return files;
 	}
 
@@ -290,9 +309,9 @@ class XmdsService {
 
 		var base64String = fileEl.innerText.trim().replaceAll(RegExp(r'\s+'), '');
 		if (log) {
-			debugPrint('[Download] Base64 length: ${base64String.length}');
+			AppLogger.download('GetFile base64 length: ${base64String.length}');
 			if (base64String.isEmpty) {
-				debugPrint('[Download] ERROR: empty base64 in GetFile response');
+				AppLogger.apiError('Download', 'empty base64 in GetFile response');
 			}
 		}
 		if (base64String.isEmpty) {
@@ -312,6 +331,8 @@ class XmdsService {
 		final serverKey = await _serverKey();
 		final hardwareKey = await _hardwareKey();
 
+		AppLogger.xmds('getFileChunk fileId=$fileId type=$fileType offset=$chunkOffset size=$chunkSize');
+
 		final body = '''<tns:GetFile>
       <serverKey>$serverKey</serverKey>
       <hardwareKey>$hardwareKey</hardwareKey>
@@ -322,15 +343,8 @@ class XmdsService {
     </tns:GetFile>''';
 
 		final raw = await _callRaw('GetFile', body);
-		if (logResponse) {
-			final end = raw.length > 300 ? 300 : raw.length;
-			debugPrint('[Download] GetFile raw response (first 300): ${raw.substring(0, end)}');
-		}
-
 		final bytes = decodeGetFileResponse(raw, log: logResponse);
-		if (logResponse) {
-			debugPrint('[Download] Base64 decoded bytes: ${bytes.length}');
-		}
+		AppLogger.xmds('getFileChunk OK fileId=$fileId bytes=${bytes.length}');
 		return bytes;
 	}
 
@@ -339,6 +353,8 @@ class XmdsService {
 	}
 
 	Future<ScheduleResult> getScheduleWithDefault() async {
+		AppLogger.xmds('getSchedule');
+
 		final serverKey = await _serverKey();
 		final hardwareKey = await _hardwareKey();
 
@@ -350,22 +366,25 @@ class XmdsService {
 		final raw = await _callRaw('Schedule', body);
 		const wrappers = ['ScheduleXml', 'scheduledXml', 'Schedule'];
 		final unescapedSchedule = extractUnescapedSoapInner(raw, wrapperNames: wrappers);
-		debugPrint('[XLF] Unescaped schedule: $unescapedSchedule');
 
 		final doc = XmlDocument.parse(unescapedSchedule);
 		final schedule = ScheduleItem.fromXmlDocument(doc);
 		final layoutFileIds = ScheduleItem.layoutFileIdsFromDocument(doc);
-		debugPrint('[XLF] Layout file IDs from schedule: $layoutFileIds');
-		debugPrint('[XMDS] Layout count after fix: ${layoutFileIds.length}');
+		final defaultLayoutId = ScheduleItem.parseDefaultLayoutId(doc);
+		AppLogger.xmds(
+			'getSchedule OK items=${schedule.length} layouts=$layoutFileIds defaultLayout=$defaultLayoutId',
+		);
 		return ScheduleResult(
 			schedule: schedule,
-			defaultLayoutId: ScheduleItem.parseDefaultLayoutId(doc),
+			defaultLayoutId: defaultLayoutId,
 		);
 	}
 
 	Future<void> submitStats({
 		required String statXml,
 	}) async {
+		AppLogger.xmds('submitStats statXml=${AppLogger.truncate(statXml, max: 200)}');
+
 		final serverKey = await _serverKey();
 		final hardwareKey = await _hardwareKey();
 
@@ -376,9 +395,12 @@ class XmdsService {
     </tns:SubmitStats>''';
 
 		await _call('SubmitStats', body);
+		AppLogger.xmds('submitStats OK');
 	}
 
 	Future<void> mediaInventory(List<RequiredFile> files) async {
+		AppLogger.xmds('mediaInventory fileCount=${files.length}');
+
 		final serverKey = await _serverKey();
 		final hardwareKey = await _hardwareKey();
 
@@ -395,6 +417,7 @@ class XmdsService {
     </tns:MediaInventory>''';
 
 		await _call('MediaInventory', body);
+		AppLogger.xmds('mediaInventory OK');
 	}
 
 	Future<void> notifyStatus({
@@ -402,6 +425,8 @@ class XmdsService {
 		required int freeMB,
 		String lastMediaId = '0',
 	}) async {
+		AppLogger.xmds('notifyStatus layoutId=$layoutId freeMB=$freeMB lastMediaId=$lastMediaId');
+
 		final serverKey = await _serverKey();
 		final hardwareKey = await _hardwareKey();
 
@@ -416,6 +441,7 @@ class XmdsService {
     </tns:NotifyStatus>''';
 
 		await _call('NotifyStatus', body);
+		AppLogger.xmds('notifyStatus OK');
 	}
 
 	String _escapeXml(String input) => input

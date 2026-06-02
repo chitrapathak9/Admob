@@ -7,15 +7,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/player_config.dart';
+import '../models/screen_connect_data.dart';
 
 const kXmdsUrl = 'xmds_url';
 const kXmrUrl = 'xmr_url';
 const kCmsKey = 'cms_key';
 const kHardwareKey = 'hardware_key';
 const kDisplayName = 'display_name';
+const kDeviceId = 'device_id';
 const kUserCmsKey = 'user_cms_key';
 const kCollectionInterval = 'collection_interval';
 const kIsApproved = 'is_approved';
+const kRegistrationStatus = 'registration_status';
+const kManifestHash = 'manifest_hash';
 const kCurrentLayoutId = 'current_layout_id';
 const kConfigJson = 'player_config_json';
 
@@ -28,6 +32,35 @@ class StorageService {
 	Future<SharedPreferences> get prefs async {
 		_prefs ??= await SharedPreferences.getInstance();
 		return _prefs!;
+	}
+
+	Future<void> saveConnectResult(ScreenConnectData connect) async {
+		final config = PlayerConfig(
+			xmdsUrl: connect.xmdsUrl,
+			xmrUrl: connect.xmrUrl,
+			cmsKey: connect.cmsKey,
+			version: '5',
+			collectionInterval: 60,
+		);
+		await saveConfig(config);
+		final p = await prefs;
+		await p.setString(kDeviceId, connect.deviceId);
+		await p.setString(kRegistrationStatus, connect.status);
+	}
+
+	Future<void> saveRegistrationStatus(String status) async {
+		final p = await prefs;
+		await p.setString(kRegistrationStatus, status);
+	}
+
+	Future<String?> loadRegistrationStatus() async {
+		final p = await prefs;
+		return p.getString(kRegistrationStatus);
+	}
+
+	Future<String?> loadDeviceId() async {
+		final p = await prefs;
+		return p.getString(kDeviceId);
 	}
 
 	Future<void> saveConfig(PlayerConfig config) async {
@@ -155,4 +188,19 @@ class StorageService {
 	}
 
 	Future<bool> hasConfig() async => (await loadConfig()) != null;
+
+	Future<bool> hasPendingRegistration() async {
+		if (await isApproved()) return false;
+		return await hasConfig();
+	}
+
+	Future<void> saveManifestHash(String hash) async {
+		final p = await prefs;
+		await p.setString(kManifestHash, hash);
+	}
+
+	Future<String?> loadManifestHash() async {
+		final p = await prefs;
+		return p.getString(kManifestHash);
+	}
 }

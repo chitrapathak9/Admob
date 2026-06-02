@@ -5,6 +5,7 @@ class PlayItem {
 	final String mediaId;
 	final String layoutId;
 	final int scheduleId;
+	final String filename;
 
 	const PlayItem({
 		required this.localPath,
@@ -13,6 +14,7 @@ class PlayItem {
 		this.mediaId = '',
 		this.layoutId = '',
 		this.scheduleId = 0,
+		this.filename = '',
 	});
 
 	@override

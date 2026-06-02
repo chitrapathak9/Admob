@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../utils/app_logger.dart';
+
 typedef XmrCallback = void Function();
 
 class XmrService {
@@ -22,6 +24,7 @@ class XmrService {
 
 	Future<void> connect(String xmrUrl) async {
 		_disposed = false;
+		AppLogger.xmr('connect url=$xmrUrl');
 		await _connectInternal(xmrUrl);
 	}
 
@@ -32,13 +35,21 @@ class XmrService {
 			_channel = WebSocketChannel.connect(Uri.parse(xmrUrl));
 			_subscription = _channel!.stream.listen(
 				_handleMessage,
-				onError: (_) => _scheduleReconnect(xmrUrl),
-				onDone: () => _scheduleReconnect(xmrUrl),
+				onError: (e) {
+					AppLogger.apiError('XMR', 'stream error', e);
+					_scheduleReconnect(xmrUrl);
+				},
+				onDone: () {
+					AppLogger.xmr('connection closed — scheduling reconnect');
+					_scheduleReconnect(xmrUrl);
+				},
 				cancelOnError: false,
 			);
 			_backoffSeconds = 1;
 			_startPing();
-		} catch (_) {
+			AppLogger.xmr('connected OK');
+		} catch (e, st) {
+			AppLogger.apiError('XMR', 'connect failed', e, st);
 			_scheduleReconnect(xmrUrl);
 		}
 	}
@@ -46,8 +57,10 @@ class XmrService {
 	void _handleMessage(dynamic message) {
 		try {
 			final str = message is String ? message : utf8.decode(message as List<int>);
+			AppLogger.xmr('← message: ${AppLogger.truncate(str, max: 300)}');
 			final cmd = jsonDecode(str) as Map<String, dynamic>;
 			final action = cmd['action'] ?? cmd['type'];
+			AppLogger.xmr('  action=$action');
 			switch (action) {
 				case 'collectNow':
 					onCollectNow?.call();
@@ -60,21 +73,27 @@ class XmrService {
 					onScreenshot?.call();
 					break;
 			}
-		} catch (_) {}
+		} catch (e, st) {
+			AppLogger.apiError('XMR', 'failed to parse message', e, st);
+		}
 	}
 
 	void _startPing() {
 		_pingTimer?.cancel();
 		_pingTimer = Timer.periodic(const Duration(seconds: 60), (_) {
 			try {
+				AppLogger.xmr('→ ping');
 				_channel?.sink.add(jsonEncode({'type': 'ping'}));
-			} catch (_) {}
+			} catch (e) {
+				AppLogger.apiError('XMR', 'ping failed', e);
+			}
 		});
 	}
 
 	void _scheduleReconnect(String xmrUrl) {
 		if (_disposed) return;
 		_reconnectTimer?.cancel();
+		AppLogger.xmr('reconnect in ${_backoffSeconds}s');
 		_reconnectTimer = Timer(Duration(seconds: _backoffSeconds), () {
 			_backoffSeconds = (_backoffSeconds * 2).clamp(1, 60);
 			_connectInternal(xmrUrl);
@@ -82,6 +101,7 @@ class XmrService {
 	}
 
 	Future<void> disconnect() async {
+		AppLogger.xmr('disconnect');
 		_pingTimer?.cancel();
 		_pingTimer = null;
 		_reconnectTimer?.cancel();

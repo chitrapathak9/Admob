@@ -27,13 +27,13 @@ class _SplashScreenState extends State<SplashScreen> {
 		if (!mounted) return;
 
 		final storage = StorageService.instance;
-		final hasConfig = await storage.hasConfig();
 		final approved = await storage.isApproved();
+		final pendingRegistration = await storage.hasPendingRegistration();
 
 		Widget next;
-		if (approved && hasConfig) {
+		if (approved) {
 			next = const PlayerScreen();
-		} else if (hasConfig) {
+		} else if (pendingRegistration) {
 			next = const WaitingScreen();
 		} else {
 			next = const SetupScreen();

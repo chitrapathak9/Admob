@@ -3,13 +3,15 @@ import 'dart:math' show min;
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../config/app_config.dart';
 import '../models/download_progress.dart';
 import '../models/required_file.dart';
 import '../models/schedule_item.dart';
+import '../models/player_manifest.dart';
+import '../utils/api_log_interceptor.dart';
+import '../utils/app_logger.dart';
 import 'xmds_service.dart';
 
 class DownloadService {
@@ -22,13 +24,93 @@ class DownloadService {
 		connectTimeout: const Duration(seconds: 60),
 		receiveTimeout: const Duration(seconds: 60),
 		responseType: ResponseType.bytes,
-	));
+	))..interceptors.add(ApiLogInterceptor(logResponseBody: false));
 
 	Directory? _appDir;
 
 	Future<Directory> getAppStorageDir() async {
 		_appDir ??= await getApplicationDocumentsDirectory();
 		return _appDir!;
+	}
+
+	Future<String> getMediaLocalPath(String filename) async {
+		final dir = await getAppStorageDir();
+		final mediaDir = Directory('${dir.path}/media');
+		if (!await mediaDir.exists()) {
+			await mediaDir.create(recursive: true);
+		}
+		return '${mediaDir.path}/$filename';
+	}
+
+	Future<bool> manifestFileExists(String filename, String expectedMd5) async {
+		final path = await getMediaLocalPath(filename);
+		final file = File(path);
+		if (!await file.exists()) return false;
+		if (expectedMd5.isEmpty) return true;
+		final bytes = await file.readAsBytes();
+		final digest = md5.convert(bytes).toString();
+		return digest.toLowerCase() == expectedMd5.toLowerCase();
+	}
+
+	Future<void> downloadManifestItem(ManifestMediaItem item) async {
+		if (item.filename.isEmpty || item.downloadUrl.isEmpty) {
+			throw Exception('Invalid manifest item: ${item.name}');
+		}
+
+		if (await manifestFileExists(item.filename, item.md5)) {
+			AppLogger.download('Manifest cached OK: ${item.filename}');
+			return;
+		}
+
+		final savePath = await getMediaLocalPath(item.filename);
+		await _downloadManifestFromUrl(item, savePath);
+	}
+
+	Future<void> _downloadManifestFromUrl(ManifestMediaItem item, String savePath) async {
+		AppLogger.download('Manifest HTTP: ${item.filename}');
+
+		for (var attempt = 0; attempt < 2; attempt++) {
+			try {
+				final response = await _http.get<List<int>>(item.downloadUrl);
+				final bytes = response.data;
+				if (bytes == null || bytes.isEmpty) {
+					throw Exception('Empty download for ${item.filename}');
+				}
+
+				if (item.md5.isNotEmpty) {
+					final actualMd5 = md5.convert(bytes).toString();
+					if (actualMd5.toLowerCase() != item.md5.toLowerCase()) {
+						final badFile = File(savePath);
+						if (await badFile.exists()) await badFile.delete();
+						throw Exception('MD5 mismatch for ${item.filename}');
+					}
+				}
+
+				await File(savePath).writeAsBytes(bytes, flush: true);
+				AppLogger.download('Saved manifest file: ${item.filename} (${bytes.length} bytes)');
+				return;
+			} catch (e) {
+				final badFile = File(savePath);
+				if (await badFile.exists()) await badFile.delete();
+				if (attempt == 0) {
+					AppLogger.download('Manifest retry in 10s: ${item.filename}');
+					await Future<void>.delayed(const Duration(seconds: 10));
+					continue;
+				}
+				AppLogger.download('Manifest failed: ${item.filename} → $e');
+				rethrow;
+			}
+		}
+	}
+
+	Future<void> downloadManifestMedia(List<ManifestMediaItem> items) async {
+		for (final item in items) {
+			try {
+				await downloadManifestItem(item);
+			} catch (e) {
+				AppLogger.download('Skipping ${item.filename}: $e');
+			}
+		}
 	}
 
 	Future<String> getLocalPath(String saveAs) async {
@@ -67,9 +149,9 @@ class DownloadService {
 		if (shouldSkipPlaybackFile(file)) {
 			final ext = file.saveAs.contains('.') ? file.saveAs.split('.').last : file.saveAs;
 			if (_skipExtensions.contains(ext.toLowerCase())) {
-				debugPrint('[Download] Skipping font/JS: ${file.saveAs}');
+				AppLogger.download('Skipping font/JS: ${file.saveAs}');
 			} else {
-				debugPrint('[Download] Skipping default layout 1');
+				AppLogger.download('Skipping default layout 1');
 			}
 			return;
 		}
@@ -82,10 +164,10 @@ class DownloadService {
 			final bytes = await existing.readAsBytes();
 			final actualMd5 = md5.convert(bytes).toString();
 			if (actualMd5.toLowerCase() == file.md5.toLowerCase()) {
-				debugPrint('[Download] Already cached OK: ${file.saveAs}');
+				AppLogger.download('Already cached OK: ${file.saveAs}');
 				return;
 			}
-			debugPrint('[Download] MD5 mismatch — re-downloading: ${file.saveAs}');
+			AppLogger.download('MD5 mismatch — re-downloading: ${file.saveAs}');
 		}
 
 		if (file.isHttpDownload && file.path.isNotEmpty) {
@@ -96,9 +178,9 @@ class DownloadService {
 	}
 
 	Future<void> _downloadViaHttp(RequiredFile file, String savePath) async {
-		debugPrint('[Download] HTTP: ${file.saveAs}');
+		AppLogger.download('HTTP: ${file.saveAs}');
 		final previewLen = file.path.length.clamp(0, 100);
-		debugPrint('[Download] URL: ${file.path.substring(0, previewLen)}...');
+		AppLogger.download('URL: ${file.path.substring(0, previewLen)}...');
 
 		try {
 			final response = await _http.get<List<int>>(file.path);
@@ -117,9 +199,9 @@ class DownloadService {
 			}
 
 			await File(savePath).writeAsBytes(bytes, flush: true);
-			debugPrint('[Download] Saved via HTTP: ${file.saveAs} (${bytes.length} bytes)');
+			AppLogger.download('Saved via HTTP: ${file.saveAs} (${bytes.length} bytes)');
 		} catch (e) {
-			debugPrint('[Download] HTTP failed: ${file.saveAs} → $e');
+			AppLogger.download('HTTP failed: ${file.saveAs} → $e');
 			rethrow;
 		}
 	}
@@ -134,7 +216,7 @@ class DownloadService {
 		final allBytes = <int>[];
 		var isFirstChunk = logFirstResponse;
 
-		debugPrint('[Download] XMDS GetFile: ${file.saveAs} id=${file.id} type=${file.type}');
+		AppLogger.download('XMDS GetFile: ${file.saveAs} id=${file.id} type=${file.type}');
 
 		if (file.size > 0) {
 			while (offset < file.size) {
@@ -152,7 +234,7 @@ class DownloadService {
 
 				if (chunk.isEmpty) {
 					if (offset == 0) {
-						debugPrint('[Download] ERROR: empty base64 for ${file.saveAs}');
+						AppLogger.download('ERROR: empty base64 for ${file.saveAs}');
 					}
 					break;
 				}
@@ -191,13 +273,13 @@ class DownloadService {
 		}
 
 		await File(savePath).writeAsBytes(allBytes, flush: true);
-		debugPrint('[Download] Saved via GetFile: ${file.saveAs} (${allBytes.length} bytes)');
+		AppLogger.download('Saved via GetFile: ${file.saveAs} (${allBytes.length} bytes)');
 	}
 
 	Future<List<RequiredFile>> downloadAllMissing(List<RequiredFile> requiredFiles) async {
 		final dir = await getApplicationDocumentsDirectory();
-		debugPrint('[Download] Storage path: ${dir.path}');
-		debugPrint('[Download] Total files in manifest: ${requiredFiles.length}');
+		AppLogger.download('Storage path: ${dir.path}');
+		AppLogger.download('Total files in manifest: ${requiredFiles.length}');
 
 		final failed = <RequiredFile>[];
 		final errors = <String, String>{};
@@ -214,7 +296,7 @@ class DownloadService {
 
 			try {
 				if (await fileExists(file.saveAs, file.md5)) {
-					debugPrint('[Download] Already present: ${file.saveAs}');
+					AppLogger.download('Already present: ${file.saveAs}');
 					successCount++;
 					continue;
 				}
@@ -227,16 +309,16 @@ class DownloadService {
 				failCount++;
 				failed.add(file);
 				errors[file.saveAs] = e.toString();
-				debugPrint('[Download] FAILED: ${file.saveAs} error: $e');
+				AppLogger.download('FAILED: ${file.saveAs} error: $e');
 			}
 		}
 
-		debugPrint('[Download] === DOWNLOAD SUMMARY ===');
-		debugPrint('[Download] Manifest: ${requiredFiles.length}, skipped: $skipCount');
-		debugPrint('[Download] Successfully saved: $successCount');
-		debugPrint('[Download] Failed: $failCount');
+		AppLogger.download('=== DOWNLOAD SUMMARY ===');
+		AppLogger.download('Manifest: ${requiredFiles.length}, skipped: $skipCount');
+		AppLogger.download('Successfully saved: $successCount');
+		AppLogger.download('Failed: $failCount');
 		for (final entry in errors.entries) {
-			debugPrint('[Download] FAILED: ${entry.key} error: ${entry.value}');
+			AppLogger.download('FAILED: ${entry.key} error: ${entry.value}');
 		}
 
 		return failed;
@@ -383,28 +465,28 @@ class DownloadService {
 		if (scheduledLayouts.isEmpty) {
 			scheduledLayouts = RequiredFile.layoutIdsFromFiles(required);
 			if (scheduledLayouts.isNotEmpty) {
-				debugPrint('[Download] Layout IDs from RequiredFiles: $scheduledLayouts');
+				AppLogger.download('Layout IDs from RequiredFiles: $scheduledLayouts');
 			}
 		}
 
 		if (scheduledLayouts.isEmpty) {
-			debugPrint('[Download] No scheduled content');
+			AppLogger.download('No scheduled content');
 			return required;
 		}
 
-		debugPrint('[Download] syncContentForSchedule layouts: $scheduledLayouts');
+		AppLogger.download('syncContentForSchedule layouts: $scheduledLayouts');
 
 		for (final layoutId in scheduledLayouts) {
 			final xlfName = '$layoutId.xlf';
 			final xlfFile = RequiredFile.findBySaveAs(required, xlfName);
 			if (xlfFile == null) {
-				debugPrint('[Download] XLF $xlfName not in RequiredFiles — skipping');
+				AppLogger.download('XLF $xlfName not in RequiredFiles — skipping');
 				continue;
 			}
 			try {
 				await downloadFile(xlfFile);
 			} catch (e) {
-				debugPrint('[Download] XLF download failed $xlfName: $e');
+				AppLogger.download('XLF download failed $xlfName: $e');
 			}
 		}
 
@@ -412,12 +494,12 @@ class DownloadService {
 			try {
 				await downloadFile(file);
 			} catch (e) {
-				debugPrint('[Download] Failed ${file.saveAs}: $e');
+				AppLogger.download('Failed ${file.saveAs}: $e');
 			}
 		}
 
 		required = await XmdsService.instance.getRequiredFiles();
-		debugPrint('[Download] RequiredFiles after sync: ${required.length}');
+		AppLogger.download('RequiredFiles after sync: ${required.length}');
 		return required;
 	}
 }

@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
-import '../services/config_service.dart';
+import '../models/screen_connect_data.dart';
+import '../services/screen_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmds_service.dart';
+import '../utils/app_logger.dart';
 import '../utils/device_name.dart';
 import '../widgets/adaptive_padding.dart';
 import '../widgets/theadbook_logo.dart';
+import 'player_screen.dart';
 import 'waiting_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -17,7 +20,6 @@ class SetupScreen extends StatefulWidget {
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-	final _cmsKeyController = TextEditingController();
 	final _screenNameController = TextEditingController();
 	bool _loading = false;
 	String? _error;
@@ -34,17 +36,41 @@ class _SetupScreenState extends State<SetupScreen> {
 
 	@override
 	void dispose() {
-		_cmsKeyController.dispose();
 		_screenNameController.dispose();
 		super.dispose();
 	}
 
+	Future<ScreenConnectData> _connectWithRetry({
+		required String hardwareKey,
+		required String screenName,
+	}) async {
+		Object? lastError;
+		for (var attempt = 0; attempt < AppConfig.connectMaxRetries; attempt++) {
+			AppLogger.setup('Connect attempt ${attempt + 1}/${AppConfig.connectMaxRetries}');
+			try {
+				return await ScreenService.instance.connect(
+					hardwareKey: hardwareKey,
+					deviceName: screenName,
+				);
+			} catch (e, st) {
+				lastError = e;
+				AppLogger.setupError('Connect attempt ${attempt + 1} failed', e, st);
+				if (attempt < AppConfig.connectMaxRetries - 1) {
+					AppLogger.setup('Retrying in ${AppConfig.connectRetrySeconds}s…');
+					await Future<void>.delayed(
+						const Duration(seconds: AppConfig.connectRetrySeconds),
+					);
+				}
+			}
+		}
+		throw lastError ?? Exception('Screen connect failed');
+	}
+
 	Future<void> _connect() async {
-		final cmsKey = _cmsKeyController.text.trim();
 		final screenName = _screenNameController.text.trim();
 
-		if (cmsKey.isEmpty || screenName.isEmpty) {
-			setState(() => _error = 'Please enter CMS Key and Screen Name');
+		if (screenName.isEmpty) {
+			setState(() => _error = 'Please enter a screen name');
 			return;
 		}
 
@@ -54,22 +80,37 @@ class _SetupScreenState extends State<SetupScreen> {
 		});
 
 		try {
-			final config = await ConfigService.instance.fetchConfig();
-			if (config.cmsKey != cmsKey) {
-				throw Exception('CMS Key does not match server configuration');
-			}
+			final storage = StorageService.instance;
+			final hardwareKey = await storage.getOrCreateHardwareKey();
 
-			await StorageService.instance.saveUserCmsKey(cmsKey);
-			await StorageService.instance.saveDisplayName(screenName);
-			await StorageService.instance.getOrCreateHardwareKey();
+			AppLogger.setup('Starting registration for "$screenName" hardwareKey=$hardwareKey');
 
-			await XmdsService.instance.registerDisplay(screenName);
+			final connectResult = await _connectWithRetry(
+				hardwareKey: hardwareKey,
+				screenName: screenName,
+			);
+
+			AppLogger.setup('Connect succeeded — saving credentials (status=${connectResult.status})');
+			await storage.saveDisplayName(screenName);
+			await storage.saveConnectResult(connectResult);
+			await storage.setApproved(connectResult.status == 'approved');
+
+			AppLogger.setup('Calling XMDS RegisterDisplay…');
+			final registerResult = await XmdsService.instance.registerDisplay(screenName);
+			AppLogger.setup(
+				'RegisterDisplay finished: code=${registerResult.code} message="${registerResult.message}"',
+			);
 
 			if (!mounted) return;
+			final next = connectResult.status == 'approved'
+				? const PlayerScreen()
+				: const WaitingScreen();
+			AppLogger.setup('Navigating to ${connectResult.status == 'approved' ? 'PlayerScreen' : 'WaitingScreen'}');
 			Navigator.of(context).pushReplacement(
-				MaterialPageRoute<void>(builder: (_) => const WaitingScreen()),
+				MaterialPageRoute<void>(builder: (_) => next),
 			);
-		} catch (e) {
+		} catch (e, st) {
+			AppLogger.setupError('Registration flow failed', e, st);
 			if (mounted) {
 				setState(() {
 					_error = e.toString().replaceFirst('Exception: ', '');
@@ -105,12 +146,13 @@ class _SetupScreenState extends State<SetupScreen> {
 										style: TextStyle(color: Colors.white, fontSize: titleSize),
 										textAlign: TextAlign.center,
 									),
-									const SizedBox(height: 40),
-									_buildField(
-										label: 'CMS Key',
-										controller: _cmsKeyController,
+									const SizedBox(height: 12),
+									const Text(
+										'Your screen will appear in the admin panel for approval.',
+										style: TextStyle(color: Colors.white54, fontSize: 14),
+										textAlign: TextAlign.center,
 									),
-									const SizedBox(height: 20),
+									const SizedBox(height: 40),
 									_buildField(
 										label: 'Screen Name',
 										controller: _screenNameController,
