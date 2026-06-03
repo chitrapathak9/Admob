@@ -22,18 +22,32 @@ class ScreenStatusData {
 	});
 
 	bool get isApproved => status == 'approved';
+	bool get isActive => status == 'active';
+	bool get isApprovedOrActive => isApproved || isActive;
 	bool get isExpired => status == 'expired';
 	bool get isProcessing => status == 'processing';
 	bool get isPending => status == 'pending';
 
+	/// Backend returns this when POST /screens/connect was never called.
+	bool get needsConnectFirst =>
+		deviceId.isEmpty &&
+		(message.toLowerCase().contains('connect') ||
+			message.toLowerCase().contains('not initiated') ||
+			message.toLowerCase().contains('registration'));
+
+	static String _str(dynamic value, [String fallback = '']) {
+		if (value == null) return fallback;
+		return value.toString();
+	}
+
 	factory ScreenStatusData.fromJson(Map<String, dynamic> json) {
 		final data = json['data'] as Map<String, dynamic>? ?? json;
 		return ScreenStatusData(
-			status: data['status'] as String,
-			hardwareKey: data['hardwareKey'] as String,
-			deviceId: data['deviceId'] as String,
+			status: _str(data['status'], 'pending'),
+			hardwareKey: _str(data['hardwareKey']),
+			deviceId: _str(data['deviceId']),
 			xiboDisplayId: (data['xiboDisplayId'] as num?)?.toInt(),
-			displayName: data['displayName'] as String? ?? '',
+			displayName: _str(data['displayName']),
 			registeredAt: data['registeredAt'] != null ? DateTime.tryParse(data['registeredAt'] as String) : null,
 			approvedAt: data['approvedAt'] != null ? DateTime.tryParse(data['approvedAt'] as String) : null,
 			expiresAt: data['expiresAt'] != null ? DateTime.tryParse(data['expiresAt'] as String) : null,

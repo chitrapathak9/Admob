@@ -5,6 +5,7 @@ class PlayerConfig {
 	final String version;
 	final int collectionInterval;
 	final String? supportEmail;
+	final String? playerDomain;
 
 	const PlayerConfig({
 		required this.xmdsUrl,
@@ -13,6 +14,7 @@ class PlayerConfig {
 		required this.version,
 		required this.collectionInterval,
 		this.supportEmail,
+		this.playerDomain,
 	});
 
 	factory PlayerConfig.fromJson(Map<String, dynamic> json) {
@@ -24,6 +26,7 @@ class PlayerConfig {
 			version: data['version']?.toString() ?? '5',
 			collectionInterval: (data['collectionInterval'] as num?)?.toInt() ?? 60,
 			supportEmail: data['supportEmail'] as String?,
+			playerDomain: data['playerDomain'] as String? ?? data['player_domain'] as String?,
 		);
 	}
 
@@ -34,5 +37,6 @@ class PlayerConfig {
 		'version': version,
 		'collectionInterval': collectionInterval,
 		'supportEmail': supportEmail,
+		'playerDomain': playerDomain,
 	};
 }

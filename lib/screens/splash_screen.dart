@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
+import '../services/player_init_service.dart';
 import '../services/storage_service.dart';
 import '../widgets/adaptive_padding.dart';
 import '../widgets/theadbook_logo.dart';
@@ -24,6 +25,10 @@ class _SplashScreenState extends State<SplashScreen> {
 
 	Future<void> _navigate() async {
 		await Future<void>.delayed(const Duration(seconds: AppConfig.splashDelaySeconds));
+		if (!mounted) return;
+
+		await PlayerInitService.instance.initialize();
+
 		if (!mounted) return;
 
 		final storage = StorageService.instance;

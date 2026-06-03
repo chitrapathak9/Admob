@@ -3,7 +3,9 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../config/app_config.dart';
 import '../utils/app_logger.dart';
+import '../utils/websocket_url.dart';
 
 typedef XmrCallback = void Function();
 
@@ -16,7 +18,9 @@ class XmrService {
 	Timer? _pingTimer;
 	Timer? _reconnectTimer;
 	int _backoffSeconds = 1;
+	int _connectFailures = 0;
 	bool _disposed = false;
+	bool _reconnectPaused = false;
 
 	XmrCallback? onCollectNow;
 	XmrCallback? onRevertToSchedule;
@@ -24,20 +28,24 @@ class XmrService {
 
 	Future<void> connect(String xmrUrl) async {
 		_disposed = false;
+		_reconnectPaused = false;
+		_connectFailures = 0;
 		AppLogger.xmr('connect url=$xmrUrl');
 		await _connectInternal(xmrUrl);
 	}
 
 	Future<void> _connectInternal(String xmrUrl) async {
-		if (_disposed) return;
+		if (_disposed || _reconnectPaused) return;
 		try {
 			await disconnect();
-			_channel = WebSocketChannel.connect(Uri.parse(xmrUrl));
+			final uri = normalizeWebSocketUri(xmrUrl);
+			AppLogger.xmr('connect uri=$uri');
+			_channel = WebSocketChannel.connect(uri);
 			_subscription = _channel!.stream.listen(
 				_handleMessage,
 				onError: (e) {
 					AppLogger.apiError('XMR', 'stream error', e);
-					_scheduleReconnect(xmrUrl);
+					_handleConnectFailure(xmrUrl, e);
 				},
 				onDone: () {
 					AppLogger.xmr('connection closed — scheduling reconnect');
@@ -46,12 +54,29 @@ class XmrService {
 				cancelOnError: false,
 			);
 			_backoffSeconds = 1;
+			_connectFailures = 0;
 			_startPing();
 			AppLogger.xmr('connected OK');
 		} catch (e, st) {
 			AppLogger.apiError('XMR', 'connect failed', e, st);
-			_scheduleReconnect(xmrUrl);
+			_handleConnectFailure(xmrUrl, e);
 		}
+	}
+
+	void _handleConnectFailure(String xmrUrl, Object? error) {
+		_connectFailures++;
+		final errStr = error?.toString() ?? '';
+		final permanent = errStr.contains('404') ||
+			errStr.contains('403') ||
+			errStr.contains('not upgraded') ||
+			errStr.contains(':0/');
+
+		if (permanent && _connectFailures >= 3) {
+			_reconnectPaused = true;
+			AppLogger.xmr('Reconnect paused after $_connectFailures failures');
+			return;
+		}
+		_scheduleReconnect(xmrUrl);
 	}
 
 	void _handleMessage(dynamic message) {
@@ -91,11 +116,11 @@ class XmrService {
 	}
 
 	void _scheduleReconnect(String xmrUrl) {
-		if (_disposed) return;
+		if (_disposed || _reconnectPaused) return;
 		_reconnectTimer?.cancel();
 		AppLogger.xmr('reconnect in ${_backoffSeconds}s');
 		_reconnectTimer = Timer(Duration(seconds: _backoffSeconds), () {
-			_backoffSeconds = (_backoffSeconds * 2).clamp(1, 60);
+			_backoffSeconds = (_backoffSeconds * 2).clamp(1, AppConfig.xmrReconnectMaxSeconds);
 			_connectInternal(xmrUrl);
 		});
 	}

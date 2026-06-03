@@ -7,6 +7,7 @@ class AppConfig {
   static const String screensStatusPath = '/api/v1/screens/status';
   static const String playerManifestPath = '/api/v1/player/manifest';
   static const String playerHeartbeatPath = '/api/v1/player/heartbeat';
+  static const String playerOfflinePath = '/api/v1/player/offline';
   static const String healthPath = '/api/v1/player/health';
   static const int screenStatusPollSeconds = 60;
   static const int connectRetrySeconds = 30;
@@ -17,9 +18,25 @@ class AppConfig {
   static const String clientVersion = '1.0.0';
   static const String clientCode = '100';
   static const int chunkSize = 512000;
-  static const int heartbeatIntervalSeconds = 300;
+  static const int heartbeatIntervalSeconds = 60;
   static const int splashDelaySeconds = 2;
   static const int xmrPingIntervalSeconds = 60;
+  static const int xmrReconnectMaxSeconds = 120;
+
+  /// Socket.io: built-in reconnect cap and delays (ms).
+  static const int socketReconnectAttempts = 999;
+  static const int socketReconnectDelayMs = 3000;
+  static const int socketReconnectDelayMaxMs = 120000;
+  static const int socketBackoffBaseMs = 10000;
+  static const int socketBackoffMaxMs = 300000;
+  static const int socketMaxFailuresBeforePause = 5;
+  static const int socketReconnectCatchUpCooldownSeconds = 45;
+
+  /// Wait after offline socket emit + REST call so packets flush before disconnect.
+  static const int offlineNotifyFlushMs = 500;
+
+  /// Max wait for offline API during app kill (must finish before disconnect).
+  static const int offlineApiTimeoutSeconds = 10;
 
   static const Color background = Color(0xFF000000);
   static const Color accentOrange = Color(0xFFFF8C00);

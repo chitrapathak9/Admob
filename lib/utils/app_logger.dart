@@ -15,12 +15,14 @@ class AppLogger {
 	static void config(String message) => _log('Config', message);
 	static void manifest(String message) => _log('Manifest', message);
 	static void heartbeat(String message) => _log('Heartbeat', message);
+	static void offline(String message) => _log('Offline', message);
 	static void health(String message) => _log('Health', message);
 
 	// XMDS / media / realtime
 	static void xmds(String message) => _log('XMDS', message);
 	static void download(String message) => _log('Download', message);
 	static void xmr(String message) => _log('XMR', message);
+	static void socket(String message) => _log('Socket', message);
 
 	static void api(String tag, String message) => _log(tag, message);
 

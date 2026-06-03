@@ -17,11 +17,16 @@ class ScreenConnectData {
 		required this.message,
 	});
 
+	static String _str(dynamic value, [String fallback = '']) {
+		if (value == null) return fallback;
+		return value.toString();
+	}
+
 	factory ScreenConnectData.fromJson(Map<String, dynamic> json) {
 		final data = json['data'] as Map<String, dynamic>? ?? json;
 		return ScreenConnectData(
-			deviceId: data['deviceId'] as String,
-			status: data['status'] as String? ?? 'pending',
+			deviceId: _str(data['deviceId']),
+			status: _str(data['status'], 'pending'),
 			xmdsUrl: data['xmdsUrl'] as String,
 			xmrUrl: data['xmrUrl'] as String,
 			cmsKey: data['cmsKey'] as String,

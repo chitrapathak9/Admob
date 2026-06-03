@@ -6,6 +6,7 @@ class PlayItem {
 	final String layoutId;
 	final int scheduleId;
 	final String filename;
+	final String name;
 
 	const PlayItem({
 		required this.localPath,
@@ -15,7 +16,11 @@ class PlayItem {
 		this.layoutId = '',
 		this.scheduleId = 0,
 		this.filename = '',
+		this.name = '',
 	});
+
+	/// Media label for heartbeat — prefers display name, falls back to filename.
+	String get displayName => name.isNotEmpty ? name : filename;
 
 	@override
 	bool operator ==(Object other) =>

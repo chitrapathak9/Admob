@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -9,7 +10,9 @@ import '../config/app_config.dart';
 import '../models/play_item.dart';
 import '../models/player_manifest.dart';
 import '../services/download_service.dart';
+import '../services/heartbeat_service.dart';
 import '../services/player_service.dart';
+import '../services/socket_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmr_service.dart';
 import '../widgets/image_slide.dart';
@@ -28,7 +31,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
 	List<PlayItem> _playlist = [];
 	int _currentIndex = 0;
-	Timer? _heartbeatTimer;
 	Timer? _retryTimer;
 	Timer? _noContentTimer;
 	bool _noContent = false;
@@ -47,12 +49,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
 		super.initState();
 		SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 		WakelockPlus.enable();
+		_registerSocketListeners();
 		_bootstrap();
 	}
 
+	void _registerSocketListeners() {
+		final bus = SocketEventBus.instance;
+		bus.on(SocketEvent.syncNow, _handleSocketContentChange);
+		bus.on(SocketEvent.contentUpdated, _handleSocketContentChange);
+		bus.on(SocketEvent.scheduleActivated, _handleSocketScheduleChange);
+		bus.on(SocketEvent.schedulePaused, _handleSocketScheduleChange);
+		bus.on(SocketEvent.reconnected, _handleSocketContentChange);
+	}
+
+	void _handleSocketContentChange(dynamic _) {
+		if (!mounted) return;
+		_refreshManifest();
+	}
+
+	void _handleSocketScheduleChange(dynamic _) {
+		if (!mounted) return;
+		_refreshManifest();
+	}
+
 	Future<void> _bootstrap() async {
-		final ok = await _initPlayer();
-		if (!ok || !mounted) return;
+		await _initPlayer();
+		if (!mounted) return;
 
 		await _connectXmr();
 		_startHeartbeat();
@@ -169,6 +191,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 					layoutId: media.layoutId.toString(),
 					scheduleId: eventId,
 					filename: media.filename,
+					name: media.name,
 				),
 			);
 		}
@@ -229,33 +252,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
 	}
 
 	void _startHeartbeat() {
-		_heartbeatTimer?.cancel();
-		_heartbeatTimer = Timer.periodic(
-			const Duration(seconds: AppConfig.heartbeatIntervalSeconds),
-			(_) => _sendHeartbeat(),
+		HeartbeatService.instance.start(
+			playingNameProvider: _currentPlayingName,
+			onRefresh: () => _refreshManifest(),
 		);
-		_sendHeartbeat();
 	}
 
-	Future<void> _sendHeartbeat() async {
-		try {
-			final hardwareKey = await StorageService.instance.getOrCreateHardwareKey();
-			String? currentFilename;
-			if (_playlist.isNotEmpty) {
-				currentFilename = _playlist[_currentIndex % _playlist.length].filename;
-			}
+	String? _currentPlayingName() {
+		if (_playlist.isEmpty) return null;
+		return _playlist[_currentIndex % _playlist.length].displayName;
+	}
 
-			final result = await PlayerService.instance.sendHeartbeat(
-				hardwareKey: hardwareKey,
-				currentFilename: currentFilename,
-			);
-
-			if (result.shouldRefresh) {
-				await _refreshManifest();
-			}
-		} catch (e) {
-			debugPrint('[Player] Heartbeat failed (silent): $e');
-		}
+	void _stopHeartbeat() {
+		HeartbeatService.instance.stop();
 	}
 
 	Future<void> _refreshManifest({bool silent = false}) async {
@@ -316,6 +325,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
 		}
 	}
 
+	Widget _buildSocketConnectionIndicator() {
+		return StreamBuilder<bool>(
+			stream: SocketService.instance.connectionStream,
+			initialData: SocketService.instance.isConnected,
+			builder: (context, snapshot) {
+				final connected = snapshot.data ?? false;
+				return Positioned(
+					top: 8,
+					right: 8,
+					child: Container(
+						width: 8,
+						height: 8,
+						decoration: BoxDecoration(
+							shape: BoxShape.circle,
+							color: connected ? Colors.green : Colors.red,
+						),
+					),
+				);
+			},
+		);
+	}
+
 	bool _playlistEquals(List<PlayItem> a, List<PlayItem> b) {
 		if (a.length != b.length) return false;
 		for (var i = 0; i < a.length; i++) {
@@ -333,7 +364,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
 	@override
 	void dispose() {
-		_heartbeatTimer?.cancel();
+		final bus = SocketEventBus.instance;
+		bus.off(SocketEvent.syncNow, _handleSocketContentChange);
+		bus.off(SocketEvent.contentUpdated, _handleSocketContentChange);
+		bus.off(SocketEvent.scheduleActivated, _handleSocketScheduleChange);
+		bus.off(SocketEvent.schedulePaused, _handleSocketScheduleChange);
+		bus.off(SocketEvent.reconnected, _handleSocketContentChange);
+		_stopHeartbeat();
 		_retryTimer?.cancel();
 		_noContentTimer?.cancel();
 		XmrService.instance.dispose();
@@ -503,18 +540,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
 		return Scaffold(
 			backgroundColor: AppConfig.background,
-			body: KeyedSubtree(
-				key: ValueKey<int>(_slideKey),
-				child: item.type == 'video'
-					? VideoSlide(
-						localPath: item.localPath,
-						onComplete: () => _onItemComplete(item),
-					)
-					: ImageSlide(
-						localPath: item.localPath,
-						duration: item.duration,
-						onComplete: () => _onItemComplete(item),
+			body: Stack(
+				children: [
+					KeyedSubtree(
+						key: ValueKey<int>(_slideKey),
+						child: item.type == 'video'
+							? VideoSlide(
+								localPath: item.localPath,
+								onComplete: () => _onItemComplete(item),
+							)
+							: ImageSlide(
+								localPath: item.localPath,
+								duration: item.duration,
+								onComplete: () => _onItemComplete(item),
+							),
 					),
+					if (kDebugMode) _buildSocketConnectionIndicator(),
+				],
 			),
 		);
 	}

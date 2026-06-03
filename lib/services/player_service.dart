@@ -4,6 +4,7 @@ import '../config/app_config.dart';
 import '../models/player_manifest.dart';
 import '../utils/api_log_interceptor.dart';
 import '../utils/app_logger.dart';
+import 'storage_service.dart';
 
 class PlayerApiException implements Exception {
 	final String code;
@@ -70,33 +71,76 @@ class PlayerService {
 
 	Future<HeartbeatResult> sendHeartbeat({
 		required String hardwareKey,
+		required String status,
 		String? currentFilename,
+		String appVersion = AppConfig.clientVersion,
 	}) async {
 		AppLogger.heartbeat(
-			'sendHeartbeat hardwareKey=$hardwareKey currentFilename=${currentFilename ?? "(none)"}',
+			'sendHeartbeat hardwareKey=$hardwareKey status=$status '
+			'currentFilename=${currentFilename ?? "(none)"} appVersion=$appVersion',
 		);
 
 		try {
+			final requestData = <String, dynamic>{
+				'hardwareKey': hardwareKey,
+				'status': status,
+				'appVersion': appVersion,
+			};
+			if (currentFilename != null && currentFilename.isNotEmpty) {
+				requestData['currentFilename'] = currentFilename;
+			}
+
 			final response = await _dio.post<Map<String, dynamic>>(
 				AppConfig.playerHeartbeatPath,
-				data: {
-					'hardwareKey': hardwareKey,
-					if (currentFilename != null && currentFilename.isNotEmpty)
-						'currentFilename': currentFilename,
-				},
+				data: requestData,
 			);
 			final data = response.data;
 			if (data == null || data['success'] != true) {
 				AppLogger.heartbeat('OK action=continue (default — success not true)');
 				return const HeartbeatResult(action: 'continue');
 			}
-			final payload = data['data'] as Map<String, dynamic>? ?? {};
-			final action = payload['action'] as String? ?? 'continue';
+			final responseData = data['data'] as Map<String, dynamic>? ?? {};
+			final action = responseData['action'] as String? ?? 'continue';
 			AppLogger.heartbeat('OK action=$action');
 			return HeartbeatResult(action: action);
 		} catch (e, st) {
 			AppLogger.apiError('Heartbeat', 'sendHeartbeat failed (silent continue)', e, st);
 			return const HeartbeatResult(action: 'continue');
+		}
+	}
+
+	/// POST /api/v1/player/offline — must succeed before app disconnects on kill.
+	/// Returns true when server responds with success: true.
+	Future<bool> markScreenOffline() async {
+		try {
+			final hardwareKey = await StorageService.instance.getOrCreateHardwareKey();
+			AppLogger.offline(
+				'→ POST ${AppConfig.playerOfflinePath} hardwareKey=$hardwareKey',
+			);
+
+			final response = await _dio.post<Map<String, dynamic>>(
+				AppConfig.playerOfflinePath,
+				data: {'hardwareKey': hardwareKey},
+				options: Options(
+					sendTimeout: Duration(seconds: AppConfig.offlineApiTimeoutSeconds),
+					receiveTimeout: Duration(seconds: AppConfig.offlineApiTimeoutSeconds),
+				),
+			);
+
+			final data = response.data;
+			final success = data?['success'] == true;
+			final message = data?['message']?.toString() ?? '';
+
+			if (success) {
+				AppLogger.offline('← SUCCESS — $message');
+				return true;
+			}
+
+			AppLogger.offline('← FAILED — success!=true response=$data');
+			return false;
+		} catch (e, st) {
+			AppLogger.apiError('Offline', '← FAILED — API error', e, st);
+			return false;
 		}
 	}
 

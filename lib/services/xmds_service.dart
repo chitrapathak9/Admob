@@ -97,6 +97,18 @@ class XmdsService {
 			throw Exception('XMDS $method returned empty response');
 		}
 
+		if (httpStatus != null && httpStatus != 200) {
+			final msg = _httpErrorMessage(method, httpStatus, body);
+			AppLogger.apiError('XMDS', msg);
+			throw Exception(msg);
+		}
+
+		if (_isNonXmlBody(body)) {
+			final msg = 'XMDS $method returned non-XML body (HTTP ${httpStatus ?? "unknown"})';
+			AppLogger.apiError('XMDS', msg);
+			throw Exception(msg);
+		}
+
 		if (method == 'GetFile') {
 			AppLogger.xmds('← HTTP $httpStatus method=$method response=${body.length} chars (base64 omitted)');
 		} else {
@@ -114,10 +126,32 @@ class XmdsService {
 	}
 
 	Future<XmlDocument> _call(String method, String methodBody) async {
-		return XmlDocument.parse(await _callRaw(method, methodBody));
+		return _parseXml(await _callRaw(method, methodBody), context: method);
+	}
+
+	static bool _isNonXmlBody(String body) {
+		final trimmed = body.trimLeft().toLowerCase();
+		if (trimmed.startsWith('<!doctype') || trimmed.startsWith('<html')) return true;
+		if (!trimmed.startsWith('<')) return true;
+		return false;
+	}
+
+	static String _httpErrorMessage(String method, int status, String body) {
+		if (_isNonXmlBody(body)) {
+			return 'XMDS $method failed (HTTP $status): server returned HTML instead of SOAP XML';
+		}
+		return 'XMDS $method failed (HTTP $status)';
+	}
+
+	static XmlDocument _parseXml(String xml, {required String context}) {
+		if (_isNonXmlBody(xml)) {
+			throw Exception('$context: cannot parse non-XML response');
+		}
+		return XmlDocument.parse(xml);
 	}
 
 	String? _extractText(String xml, String tag) {
+		if (_isNonXmlBody(xml)) return null;
 		try {
 			final doc = XmlDocument.parse(xml);
 			final el = doc.findAllElements(tag).firstOrNull;
@@ -205,7 +239,7 @@ class XmdsService {
 
 	/// Extracts and unescapes inner payload from a SOAP XMDS response.
 	String extractUnescapedSoapInner(String rawSoap, {required List<String> wrapperNames}) {
-		final envelope = XmlDocument.parse(rawSoap);
+		final envelope = _parseXml(rawSoap, context: 'SOAP envelope');
 
 		String? innerContent;
 		for (final wrapperName in wrapperNames) {
@@ -236,7 +270,10 @@ class XmdsService {
 	}
 
 	XmlDocument _parseSoapInnerDocument(String rawSoap, {required List<String> wrapperNames}) {
-		return XmlDocument.parse(extractUnescapedSoapInner(rawSoap, wrapperNames: wrapperNames));
+		return _parseXml(
+			extractUnescapedSoapInner(rawSoap, wrapperNames: wrapperNames),
+			context: 'SOAP inner',
+		);
 	}
 
 	String? _readXmlAttribute(String attrs, String name) {
@@ -301,7 +338,7 @@ class XmdsService {
 
 	/// Decodes base64 payload from GetFile SOAP response.
 	Uint8List decodeGetFileResponse(String rawSoap, {bool log = false}) {
-		final doc = XmlDocument.parse(rawSoap);
+		final doc = _parseXml(rawSoap, context: 'GetFile');
 		final fileEl = doc.findAllElements('file').firstOrNull;
 		if (fileEl == null) {
 			throw Exception('GetFile response missing <file> element');
@@ -367,7 +404,7 @@ class XmdsService {
 		const wrappers = ['ScheduleXml', 'scheduledXml', 'Schedule'];
 		final unescapedSchedule = extractUnescapedSoapInner(raw, wrapperNames: wrappers);
 
-		final doc = XmlDocument.parse(unescapedSchedule);
+		final doc = _parseXml(unescapedSchedule, context: 'Schedule');
 		final schedule = ScheduleItem.fromXmlDocument(doc);
 		final layoutFileIds = ScheduleItem.layoutFileIdsFromDocument(doc);
 		final defaultLayoutId = ScheduleItem.parseDefaultLayoutId(doc);

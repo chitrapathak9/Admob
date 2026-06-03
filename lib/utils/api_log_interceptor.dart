@@ -15,6 +15,7 @@ class ApiLogInterceptor extends Interceptor {
 		if (path.contains('/screens/status')) return 'Status';
 		if (path.contains('/player/manifest')) return 'Manifest';
 		if (path.contains('/player/heartbeat')) return 'Heartbeat';
+		if (path.contains('/player/offline')) return 'Offline';
 		if (path.contains('/player/config')) return 'Config';
 		if (path.contains('/player/health')) return 'Health';
 		if (uri.contains('xmds.php')) return 'XMDS';

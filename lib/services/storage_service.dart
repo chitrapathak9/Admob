@@ -22,6 +22,7 @@ const kRegistrationStatus = 'registration_status';
 const kManifestHash = 'manifest_hash';
 const kCurrentLayoutId = 'current_layout_id';
 const kConfigJson = 'player_config_json';
+const kScreenConnectCompleted = 'screen_connect_completed';
 
 class StorageService {
 	StorageService._();
@@ -46,6 +47,7 @@ class StorageService {
 		final p = await prefs;
 		await p.setString(kDeviceId, connect.deviceId);
 		await p.setString(kRegistrationStatus, connect.status);
+		await p.setBool(kScreenConnectCompleted, true);
 	}
 
 	Future<void> saveRegistrationStatus(String status) async {
@@ -189,9 +191,15 @@ class StorageService {
 
 	Future<bool> hasConfig() async => (await loadConfig()) != null;
 
+	/// True only after [saveConnectResult] — not from GET /player/config alone.
+	Future<bool> hasCompletedScreenConnect() async {
+		final p = await prefs;
+		return p.getBool(kScreenConnectCompleted) ?? false;
+	}
+
 	Future<bool> hasPendingRegistration() async {
 		if (await isApproved()) return false;
-		return await hasConfig();
+		return await hasCompletedScreenConnect();
 	}
 
 	Future<void> saveManifestHash(String hash) async {

@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 import '../models/screen_status_data.dart';
 import '../services/screen_service.dart';
+import '../services/socket_service.dart';
 import '../services/storage_service.dart';
 import '../utils/app_logger.dart';
+import '../utils/device_name.dart';
 import '../widgets/adaptive_padding.dart';
 import '../widgets/theadbook_logo.dart';
 import 'player_screen.dart';
@@ -29,7 +31,23 @@ class _WaitingScreenState extends State<WaitingScreen> {
 	@override
 	void initState() {
 		super.initState();
+		SocketEventBus.instance.on(SocketEvent.screenApproved, _handleSocketApproval);
 		_init();
+	}
+
+	void _handleSocketApproval(dynamic _) {
+		if (!mounted) return;
+		AppLogger.status('Socket screen:approved — navigating to PlayerScreen');
+		_pollTimer?.cancel();
+		_navigateToPlayer();
+	}
+
+	Future<void> _navigateToPlayer() async {
+		await StorageService.instance.setApproved(true);
+		if (!mounted) return;
+		Navigator.of(context).pushReplacement(
+			MaterialPageRoute<void>(builder: (_) => const PlayerScreen()),
+		);
 	}
 
 	Future<void> _init() async {
@@ -42,8 +60,56 @@ class _WaitingScreenState extends State<WaitingScreen> {
 			return;
 		}
 
+		await _ensureScreenConnected();
 		await _pollStatus();
 		_startPollTimer();
+	}
+
+	/// Calls POST /api/v1/screens/connect when the device was never registered.
+	Future<void> _ensureScreenConnected() async {
+		final storage = StorageService.instance;
+		final hardwareKey = await storage.loadHardwareKey();
+		if (hardwareKey == null || hardwareKey.isEmpty) return;
+
+		final existingDeviceId = await storage.loadDeviceId();
+		if (existingDeviceId != null && existingDeviceId.isNotEmpty) return;
+
+		if (mounted) {
+			setState(() {
+				_statusMessage = 'Registering this device…';
+				_error = null;
+			});
+		}
+
+		var displayName = await storage.loadDisplayName();
+		if (displayName == null || displayName.isEmpty) {
+			displayName = await defaultDisplayName();
+			await storage.saveDisplayName(displayName);
+		}
+
+		try {
+			AppLogger.status('Initiating connect for hardwareKey=$hardwareKey name="$displayName"');
+			final connectResult = await ScreenService.instance.connect(
+				hardwareKey: hardwareKey,
+				deviceName: displayName,
+			);
+			await storage.saveConnectResult(connectResult);
+			AppLogger.status('Connect OK deviceId=${connectResult.deviceId} status=${connectResult.status}');
+
+			if (connectResult.status == 'approved' || connectResult.status == 'active') {
+				_pollTimer?.cancel();
+				await _navigateToPlayer();
+			}
+		} catch (e, st) {
+			AppLogger.status('Connect failed: $e');
+			debugPrint('[Status] connect stack: $st');
+			if (mounted) {
+				setState(() {
+					_error = e.toString().replaceFirst('Exception: ', '');
+					_statusMessage = 'Could not register device. Tap Reconfigure to try again.';
+				});
+			}
+		}
 	}
 
 	void _startPollTimer() {
@@ -75,14 +141,10 @@ class _WaitingScreenState extends State<WaitingScreen> {
 
 			await storage.saveRegistrationStatus(status.status);
 
-			if (status.isApproved) {
+			if (status.isApprovedOrActive) {
 				AppLogger.status('Approved — navigating to PlayerScreen');
 				_pollTimer?.cancel();
-				await storage.setApproved(true);
-				if (!mounted) return;
-				Navigator.of(context).pushReplacement(
-					MaterialPageRoute<void>(builder: (_) => const PlayerScreen()),
-				);
+				await _navigateToPlayer();
 				return;
 			}
 
@@ -96,6 +158,12 @@ class _WaitingScreenState extends State<WaitingScreen> {
 				return;
 			}
 
+			if (status.needsConnectFirst) {
+				AppLogger.status('Status requires connect — registering device');
+				await _ensureScreenConnected();
+				return;
+			}
+
 			if (status.isPending) {
 				AppLogger.status('Status pending — re-calling connect');
 				final displayName = await storage.loadDisplayName();
@@ -106,13 +174,9 @@ class _WaitingScreenState extends State<WaitingScreen> {
 							deviceName: displayName,
 						);
 						await storage.saveConnectResult(reconnect);
-						if (reconnect.status == 'approved') {
+						if (reconnect.status == 'approved' || reconnect.status == 'active') {
 							_pollTimer?.cancel();
-							await storage.setApproved(true);
-							if (!mounted) return;
-							Navigator.of(context).pushReplacement(
-								MaterialPageRoute<void>(builder: (_) => const PlayerScreen()),
-							);
+							await _navigateToPlayer();
 							return;
 						}
 					} catch (_) {}
@@ -143,7 +207,13 @@ class _WaitingScreenState extends State<WaitingScreen> {
 	}
 
 	String _messageForStatus(ScreenStatusData status) {
-		if (status.message.isNotEmpty) return status.message;
+		if (status.needsConnectFirst) {
+			return 'Registering this device…';
+		}
+		if (status.message.isNotEmpty &&
+			!status.message.toLowerCase().contains('call post')) {
+			return status.message;
+		}
 		switch (status.status) {
 			case 'pending':
 				return 'Registration request received — completing setup…';
@@ -165,6 +235,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 
 	@override
 	void dispose() {
+		SocketEventBus.instance.off(SocketEvent.screenApproved, _handleSocketApproval);
 		_pollTimer?.cancel();
 		super.dispose();
 	}
