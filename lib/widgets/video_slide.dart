@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -5,11 +6,13 @@ import 'package:video_player/video_player.dart';
 
 class VideoSlide extends StatefulWidget {
 	final String localPath;
+	final int duration;
 	final VoidCallback onComplete;
 
 	const VideoSlide({
 		super.key,
 		required this.localPath,
+		required this.duration,
 		required this.onComplete,
 	});
 
@@ -20,10 +23,15 @@ class VideoSlide extends StatefulWidget {
 class _VideoSlideState extends State<VideoSlide> {
 	VideoPlayerController? _controller;
 	bool _completed = false;
+	Timer? _durationTimer;
 
 	@override
 	void initState() {
 		super.initState();
+		// Advance after the scheduled duration. The video loops within that window
+		// so a 10 s clip scheduled for 30 s plays three times.
+		final playSeconds = widget.duration > 0 ? widget.duration : 30;
+		_durationTimer = Timer(Duration(seconds: playSeconds), _finish);
 		_init();
 	}
 
@@ -31,18 +39,20 @@ class _VideoSlideState extends State<VideoSlide> {
 		try {
 			_controller = VideoPlayerController.file(File(widget.localPath));
 			await _controller!.initialize();
+			await _controller!.setLooping(true);
 			_controller!.addListener(_onTick);
 			await _controller!.play();
 			if (mounted) setState(() {});
-		} catch (_) {
+		} catch (e) {
+			debugPrint('[VideoSlide] Init failed: $e');
 			_finish();
 		}
 	}
 
 	void _onTick() {
 		if (_completed || _controller == null) return;
-		final value = _controller!.value;
-		if (value.position >= value.duration && value.duration > Duration.zero) {
+		if (_controller!.value.hasError) {
+			debugPrint('[VideoSlide] Playback error: ${_controller!.value.errorDescription}');
 			_finish();
 		}
 	}
@@ -55,6 +65,7 @@ class _VideoSlideState extends State<VideoSlide> {
 
 	@override
 	void dispose() {
+		_durationTimer?.cancel();
 		_controller?.removeListener(_onTick);
 		_controller?.dispose();
 		super.dispose();

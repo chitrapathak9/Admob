@@ -589,6 +589,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
+  static const _videoExtensions = {'.mp4', '.mov', '.mkv', '.webm', '.m4v'};
+
+  bool _isVideo(PlayItem item) {
+    if (item.type == 'video') return true;
+    final lower = item.filename.toLowerCase();
+    return _videoExtensions.any(lower.endsWith);
+  }
+
   Widget _buildPlayerUi() {
     final item = _playlist[_currentIndex % _playlist.length];
 
@@ -598,9 +606,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
         children: [
           KeyedSubtree(
             key: ValueKey<int>(_slideKey),
-            child: item.type == 'video'
+            child: _isVideo(item)
                 ? VideoSlide(
                     localPath: item.localPath,
+                    duration: item.duration,
                     onComplete: () => _onItemComplete(item),
                   )
                 : ImageSlide(

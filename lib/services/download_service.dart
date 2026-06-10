@@ -19,12 +19,24 @@ class DownloadService {
 	static final DownloadService instance = DownloadService._();
 
 	static const _skipExtensions = {'otf', 'ttf', 'woff', 'woff2', 'js', 'css'};
+	static const _videoExtensions = {'mp4', 'mov', 'mkv', 'webm', 'm4v'};
+
+	static bool _isVideoFilename(String filename) {
+		final ext = filename.contains('.') ? filename.split('.').last.toLowerCase() : '';
+		return _videoExtensions.contains(ext);
+	}
 
 	final Dio _http = Dio(BaseOptions(
 		connectTimeout: const Duration(seconds: 60),
-		receiveTimeout: const Duration(seconds: 60),
+		receiveTimeout: const Duration(seconds: 120),
 		responseType: ResponseType.bytes,
 	))..interceptors.add(ApiLogInterceptor(logResponseBody: false));
+
+	// Separate Dio instance for streaming large video files directly to disk.
+	final Dio _streamDio = Dio(BaseOptions(
+		connectTimeout: const Duration(seconds: 60),
+		receiveTimeout: const Duration(minutes: 15),
+	));
 
 	Directory? _appDir;
 
@@ -71,23 +83,34 @@ class DownloadService {
 
 		for (var attempt = 0; attempt < 2; attempt++) {
 			try {
-				final response = await _http.get<List<int>>(item.downloadUrl);
-				final bytes = response.data;
-				if (bytes == null || bytes.isEmpty) {
-					throw Exception('Empty download for ${item.filename}');
-				}
-
-				if (item.md5.isNotEmpty) {
-					final actualMd5 = md5.convert(bytes).toString();
-					if (actualMd5.toLowerCase() != item.md5.toLowerCase()) {
-						final badFile = File(savePath);
-						if (await badFile.exists()) await badFile.delete();
-						throw Exception('MD5 mismatch for ${item.filename}');
+				if (_isVideoFilename(item.filename)) {
+					// Stream video directly to disk — avoids OOM for large files.
+					await _streamDio.download(item.downloadUrl, savePath);
+					if (item.md5.isNotEmpty) {
+						final fileBytes = await File(savePath).readAsBytes();
+						final actualMd5 = md5.convert(fileBytes).toString();
+						if (actualMd5.toLowerCase() != item.md5.toLowerCase()) {
+							await File(savePath).delete();
+							throw Exception('MD5 mismatch for ${item.filename}');
+						}
 					}
+				} else {
+					final response = await _http.get<List<int>>(item.downloadUrl);
+					final bytes = response.data;
+					if (bytes == null || bytes.isEmpty) {
+						throw Exception('Empty download for ${item.filename}');
+					}
+					if (item.md5.isNotEmpty) {
+						final actualMd5 = md5.convert(bytes).toString();
+						if (actualMd5.toLowerCase() != item.md5.toLowerCase()) {
+							final badFile = File(savePath);
+							if (await badFile.exists()) await badFile.delete();
+							throw Exception('MD5 mismatch for ${item.filename}');
+						}
+					}
+					await File(savePath).writeAsBytes(bytes, flush: true);
 				}
-
-				await File(savePath).writeAsBytes(bytes, flush: true);
-				AppLogger.download('Saved manifest file: ${item.filename} (${bytes.length} bytes)');
+				AppLogger.download('Saved manifest file: ${item.filename}');
 				return;
 			} catch (e) {
 				final badFile = File(savePath);
@@ -183,23 +206,34 @@ class DownloadService {
 		AppLogger.download('URL: ${file.path.substring(0, previewLen)}...');
 
 		try {
-			final response = await _http.get<List<int>>(file.path);
-			final bytes = response.data;
-			if (bytes == null || bytes.isEmpty) {
-				throw Exception('HTTP download empty for ${file.saveAs}');
-			}
-
-			if (file.md5.isNotEmpty) {
-				final actualMd5 = md5.convert(bytes).toString();
-				if (actualMd5.toLowerCase() != file.md5.toLowerCase()) {
-					throw Exception(
-						'MD5 mismatch for ${file.saveAs}: expected ${file.md5} got $actualMd5',
-					);
+			if (_isVideoFilename(file.saveAs)) {
+				// Stream video directly to disk — avoids OOM for large files.
+				await _streamDio.download(file.path, savePath);
+				if (file.md5.isNotEmpty) {
+					final fileBytes = await File(savePath).readAsBytes();
+					final actualMd5 = md5.convert(fileBytes).toString();
+					if (actualMd5.toLowerCase() != file.md5.toLowerCase()) {
+						await File(savePath).delete();
+						throw Exception('MD5 mismatch for ${file.saveAs}: expected ${file.md5} got $actualMd5');
+					}
 				}
+			} else {
+				final response = await _http.get<List<int>>(file.path);
+				final bytes = response.data;
+				if (bytes == null || bytes.isEmpty) {
+					throw Exception('HTTP download empty for ${file.saveAs}');
+				}
+				if (file.md5.isNotEmpty) {
+					final actualMd5 = md5.convert(bytes).toString();
+					if (actualMd5.toLowerCase() != file.md5.toLowerCase()) {
+						throw Exception(
+							'MD5 mismatch for ${file.saveAs}: expected ${file.md5} got $actualMd5',
+						);
+					}
+				}
+				await File(savePath).writeAsBytes(bytes, flush: true);
 			}
-
-			await File(savePath).writeAsBytes(bytes, flush: true);
-			AppLogger.download('Saved via HTTP: ${file.saveAs} (${bytes.length} bytes)');
+			AppLogger.download('Saved via HTTP: ${file.saveAs}');
 		} catch (e) {
 			AppLogger.download('HTTP failed: ${file.saveAs} → $e');
 			rethrow;
