@@ -18,65 +18,102 @@ class XmrService {
 	Timer? _pingTimer;
 	Timer? _reconnectTimer;
 	int _backoffSeconds = 1;
-	int _connectFailures = 0;
 	bool _disposed = false;
-	bool _reconnectPaused = false;
+	bool _connecting = false;
+	bool _connected = false;
+	bool _reconnectStopped = false;
+	String? _xmrUrl;
 
 	XmrCallback? onCollectNow;
 	XmrCallback? onRevertToSchedule;
 	XmrCallback? onScreenshot;
 
 	Future<void> connect(String xmrUrl) async {
+		if (xmrUrl.trim().isEmpty) {
+			AppLogger.xmr('Skipped — empty XMR URL');
+			return;
+		}
+		if (_connected && _xmrUrl == xmrUrl.trim()) {
+			AppLogger.xmr('Already connected — skip');
+			return;
+		}
+
 		_disposed = false;
-		_reconnectPaused = false;
-		_connectFailures = 0;
-		AppLogger.xmr('connect url=$xmrUrl');
-		await _connectInternal(xmrUrl);
+		_reconnectStopped = false;
+		_xmrUrl = xmrUrl.trim();
+		_backoffSeconds = 1;
+		AppLogger.xmr('connect url=$_xmrUrl');
+		await _connectInternal();
 	}
 
-	Future<void> _connectInternal(String xmrUrl) async {
-		if (_disposed || _reconnectPaused) return;
+	Future<void> _connectInternal() async {
+		if (_disposed || _reconnectStopped || _connecting) return;
+		final xmrUrl = _xmrUrl;
+		if (xmrUrl == null || xmrUrl.isEmpty) return;
+
+		_connecting = true;
 		try {
-			await disconnect();
+			await _tearDownChannel();
+
 			final uri = normalizeWebSocketUri(xmrUrl);
 			AppLogger.xmr('connect uri=$uri');
-			_channel = WebSocketChannel.connect(uri);
+
+			final channel = WebSocketChannel.connect(uri);
+			await channel.ready.timeout(const Duration(seconds: 15));
+
+			_channel = channel;
+			_connected = true;
 			_subscription = _channel!.stream.listen(
 				_handleMessage,
 				onError: (e) {
 					AppLogger.apiError('XMR', 'stream error', e);
-					_handleConnectFailure(xmrUrl, e);
+					_handleFailure(e);
 				},
 				onDone: () {
-					AppLogger.xmr('connection closed — scheduling reconnect');
-					_scheduleReconnect(xmrUrl);
+					if (_reconnectStopped || _disposed) return;
+					AppLogger.xmr('connection closed');
+					_handleFailure(null);
 				},
-				cancelOnError: false,
+				cancelOnError: true,
 			);
+
 			_backoffSeconds = 1;
-			_connectFailures = 0;
 			_startPing();
-			AppLogger.xmr('connected OK');
+			AppLogger.xmr('connected OK uri=$uri');
 		} catch (e, st) {
 			AppLogger.apiError('XMR', 'connect failed', e, st);
-			_handleConnectFailure(xmrUrl, e);
+			_handleFailure(e, st);
+		} finally {
+			_connecting = false;
 		}
 	}
 
-	void _handleConnectFailure(String xmrUrl, Object? error) {
-		_connectFailures++;
+	bool _isPermanentFailure(Object? error) {
 		final errStr = error?.toString() ?? '';
-		final permanent = errStr.contains('404') ||
+		return errStr.contains('not upgraded') ||
+			errStr.contains('404') ||
 			errStr.contains('403') ||
-			errStr.contains('not upgraded') ||
-			errStr.contains(':0/');
+			errStr.contains(':0/') ||
+			errStr.contains('Invalid WebSocket URL');
+	}
 
-		if (permanent && _connectFailures >= 3) {
-			_reconnectPaused = true;
-			AppLogger.xmr('Reconnect paused after $_connectFailures failures');
+	void _handleFailure(Object? error, [StackTrace? stack]) {
+		_connected = false;
+		unawaited(_tearDownChannel());
+
+		if (_isPermanentFailure(error)) {
+			_reconnectStopped = true;
+			_reconnectTimer?.cancel();
+			_reconnectTimer = null;
+			AppLogger.xmr(
+				'Permanent failure — reconnect stopped. '
+				'Check XMR URL from server config/connect response. '
+				'cause=${error ?? "connection closed"}',
+			);
 			return;
 		}
-		_scheduleReconnect(xmrUrl);
+
+		_scheduleReconnect();
 	}
 
 	void _handleMessage(dynamic message) {
@@ -95,6 +132,9 @@ class XmrService {
 					break;
 				case 'screenShot':
 				case 'screenshot':
+				case 'requestScreenShot':
+				case 'requestScreenshot':
+					AppLogger.screenshotEventReceived('XMR', action.toString(), cmd);
 					onScreenshot?.call();
 					break;
 			}
@@ -105,36 +145,51 @@ class XmrService {
 
 	void _startPing() {
 		_pingTimer?.cancel();
-		_pingTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-			try {
-				AppLogger.xmr('→ ping');
-				_channel?.sink.add(jsonEncode({'type': 'ping'}));
-			} catch (e) {
-				AppLogger.apiError('XMR', 'ping failed', e);
-			}
-		});
+		_pingTimer = Timer.periodic(
+			const Duration(seconds: AppConfig.xmrPingIntervalSeconds),
+			(_) {
+				if (!_connected || _channel == null) return;
+				try {
+					AppLogger.xmr('→ ping');
+					_channel!.sink.add(jsonEncode({'type': 'ping'}));
+				} catch (e) {
+					AppLogger.apiError('XMR', 'ping failed', e);
+				}
+			},
+		);
 	}
 
-	void _scheduleReconnect(String xmrUrl) {
-		if (_disposed || _reconnectPaused) return;
+	void _scheduleReconnect() {
+		if (_disposed || _reconnectStopped || _connecting) return;
 		_reconnectTimer?.cancel();
 		AppLogger.xmr('reconnect in ${_backoffSeconds}s');
 		_reconnectTimer = Timer(Duration(seconds: _backoffSeconds), () {
+			if (_disposed || _reconnectStopped) return;
 			_backoffSeconds = (_backoffSeconds * 2).clamp(1, AppConfig.xmrReconnectMaxSeconds);
-			_connectInternal(xmrUrl);
+			unawaited(_connectInternal());
 		});
 	}
 
-	Future<void> disconnect() async {
-		AppLogger.xmr('disconnect');
+	Future<void> _tearDownChannel() async {
 		_pingTimer?.cancel();
 		_pingTimer = null;
 		_reconnectTimer?.cancel();
 		_reconnectTimer = null;
 		await _subscription?.cancel();
 		_subscription = null;
-		await _channel?.sink.close();
+		try {
+			await _channel?.sink.close();
+		} catch (_) {}
 		_channel = null;
+		_connected = false;
+	}
+
+	Future<void> disconnect() async {
+		AppLogger.xmr('disconnect');
+		_reconnectStopped = true;
+		_reconnectTimer?.cancel();
+		_reconnectTimer = null;
+		await _tearDownChannel();
 	}
 
 	Future<void> dispose() async {

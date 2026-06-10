@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart' show Color;
 
 class AppConfig {
-  static const String baseUrl = 'https://xibo-be.yourpreview.space';
+  static const String defaultBaseUrl = 'https://xibo-be.yourpreview.space';
+  static String _baseUrl = defaultBaseUrl;
+
+  static String get baseUrl => _baseUrl;
+
+  static void setRuntimeBaseUrl(String url) {
+    _baseUrl = url;
+  }
+
   static const String configPath = '/api/v1/player/config';
   static const String screensConnectPath = '/api/v1/screens/connect';
   static const String screensStatusPath = '/api/v1/screens/status';
@@ -9,6 +17,29 @@ class AppConfig {
   static const String playerHeartbeatPath = '/api/v1/player/heartbeat';
   static const String playerOfflinePath = '/api/v1/player/offline';
   static const String healthPath = '/api/v1/player/health';
+  static const String screensScreenshotPath = '/api/v1/screens/screenshot';
+
+  /// Socket.io event names that trigger a screenshot capture.
+  static const List<String> screenshotSocketEvents = [
+    'screen:screenshot',
+    'screenshot:request',
+    'screenshot',
+    'screen:capture',
+    'screen:request_screenshot',
+    'player:screenshot',
+    // Same action names as XMR (backend may emit these on Socket.io too).
+    'requestScreenshot',
+    'requestScreenShot',
+    'screenShot',
+  ];
+
+  static bool isScreenshotSocketEvent(String name) {
+    if (screenshotSocketEvents.contains(name)) return true;
+    final lower = name.toLowerCase();
+    return lower.contains('screenshot') ||
+        lower.contains('screen_capture') ||
+        lower == 'capture';
+  }
   static const int screenStatusPollSeconds = 60;
   static const int connectRetrySeconds = 30;
   static const int connectMaxRetries = 3;

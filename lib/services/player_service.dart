@@ -4,6 +4,7 @@ import '../config/app_config.dart';
 import '../models/player_manifest.dart';
 import '../utils/api_log_interceptor.dart';
 import '../utils/app_logger.dart';
+import '../utils/registration_errors.dart';
 import 'storage_service.dart';
 
 class PlayerApiException implements Exception {
@@ -11,6 +12,9 @@ class PlayerApiException implements Exception {
 	final String message;
 
 	const PlayerApiException({required this.code, required this.message});
+
+	bool get isNotRegistered =>
+		RegistrationErrors.isNotRegistered(code: code, message: message);
 
 	@override
 	String toString() => message;
@@ -28,6 +32,10 @@ class PlayerService {
 			headers: {'Content-Type': 'application/json'},
 		),
 	)..interceptors.add(ApiLogInterceptor());
+
+	void updateBaseUrl() {
+		_dio.options.baseUrl = AppConfig.baseUrl;
+	}
 
 	Future<PlayerManifest> getManifest(String hardwareKey) async {
 		AppLogger.manifest('getManifest hardwareKey=$hardwareKey');

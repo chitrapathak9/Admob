@@ -5,6 +5,20 @@ import '../models/screen_connect_data.dart';
 import '../models/screen_status_data.dart';
 import '../utils/api_log_interceptor.dart';
 import '../utils/app_logger.dart';
+import '../utils/registration_errors.dart';
+
+class ScreenApiException implements Exception {
+	final String code;
+	final String message;
+
+	const ScreenApiException({required this.code, required this.message});
+
+	bool get isNotRegistered =>
+		RegistrationErrors.isNotRegistered(code: code, message: message);
+
+	@override
+	String toString() => message;
+}
 
 class ScreenService {
 	ScreenService._();
@@ -18,6 +32,10 @@ class ScreenService {
 			headers: {'Content-Type': 'application/json'},
 		),
 	)..interceptors.add(ApiLogInterceptor());
+
+	void updateBaseUrl() {
+		_dio.options.baseUrl = AppConfig.baseUrl;
+	}
 
 	Future<ScreenConnectData> connect({
 		required String hardwareKey,
@@ -82,9 +100,10 @@ class ScreenService {
 				throw Exception('Empty response from status');
 			}
 			if (data['success'] != true) {
+				final code = data['code']?.toString() ?? 'UNKNOWN';
 				final msg = data['message']?.toString() ?? 'Status fetch failed';
-				AppLogger.apiError('Status', 'success=false message=$msg');
-				throw Exception(msg);
+				AppLogger.apiError('Status', 'success=false code=$code message=$msg');
+				throw ScreenApiException(code: code, message: msg);
 			}
 
 			final result = ScreenStatusData.fromJson(data);
@@ -96,10 +115,62 @@ class ScreenService {
 		} on DioException catch (e, st) {
 			AppLogger.apiError('Status', 'getStatus failed', e, st);
 			final body = e.response?.data;
-			if (body is Map && body['message'] != null) {
-				throw Exception(body['message'].toString());
+			if (body is Map) {
+				throw ScreenApiException(
+					code: body['code']?.toString() ?? 'NETWORK',
+					message: body['message']?.toString() ??
+						e.message ??
+						'Network error fetching screen status',
+				);
 			}
 			throw Exception(e.message ?? 'Network error fetching screen status');
+		}
+	}
+
+	/// POST /api/v1/screens/screenshot — multipart PNG upload after socket event.
+	Future<bool> uploadScreenshot({
+		required String hardwareKey,
+		required List<int> pngBytes,
+		String? requestId,
+	}) async {
+		AppLogger.screenApi(
+			'→ POST ${AppConfig.screensScreenshotPath} '
+			'hardwareKey=$hardwareKey bytes=${pngBytes.length} '
+			'requestId=${requestId ?? "(none)"}',
+		);
+
+		try {
+			final formData = FormData.fromMap({
+				'hardwareKey': hardwareKey,
+				'clientType': AppConfig.clientType,
+				'clientVersion': AppConfig.clientVersion,
+				'capturedAt': DateTime.now().toUtc().toIso8601String(),
+				if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
+				'screenshot': MultipartFile.fromBytes(
+					pngBytes,
+					filename: 'screenshot.png',
+					contentType: DioMediaType('image', 'png'),
+				),
+			});
+
+			final response = await _dio.post<Map<String, dynamic>>(
+				AppConfig.screensScreenshotPath,
+				data: formData,
+				options: Options(contentType: 'multipart/form-data'),
+			);
+
+			final data = response.data;
+			if (data?['success'] == true) {
+				AppLogger.screenApi('← SUCCESS response=${AppLogger.sanitizeBody(data)}');
+				return true;
+			}
+
+			final msg = data?['message']?.toString() ?? 'Screenshot upload failed';
+			AppLogger.screenApiError('← FAILED success=false message=$msg');
+			return false;
+		} on DioException catch (e, st) {
+			AppLogger.screenApiError('← FAILED network error', e, st);
+			return false;
 		}
 	}
 }

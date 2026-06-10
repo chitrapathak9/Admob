@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'config/app_config.dart';
 import 'screens/splash_screen.dart';
+import 'services/screenshot_service.dart';
 
 void main() {
 	WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +25,12 @@ class TheadbookPlayerApp extends StatelessWidget {
 					primary: AppConfig.accentOrange,
 				),
 			),
+			builder: (context, child) {
+				return RepaintBoundary(
+					key: ScreenshotService.instance.repaintBoundaryKey,
+					child: child ?? const SizedBox.shrink(),
+				);
+			},
 			home: const SplashScreen(),
 		);
 	}

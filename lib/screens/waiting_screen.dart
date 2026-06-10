@@ -22,9 +22,17 @@ class WaitingScreen extends StatefulWidget {
 }
 
 class _WaitingScreenState extends State<WaitingScreen> {
+	static const _connectedTitle = 'Screen Connected Successfully';
+	static const _connectedMessage =
+		'Your screen has been detected and is waiting for approval.\n'
+		'Once approved, content will start playing automatically.';
+	static const _connectingTitle = 'Connecting Your Screen';
+	static const _connectingMessage = 'Please wait while we register your screen…';
+
 	Timer? _pollTimer;
 	String _hardwareKey = '';
-	String _statusMessage = 'Waiting for admin approval…';
+	String _title = _connectedTitle;
+	String _message = _connectedMessage;
 	String? _error;
 	bool _polling = false;
 
@@ -32,7 +40,13 @@ class _WaitingScreenState extends State<WaitingScreen> {
 	void initState() {
 		super.initState();
 		SocketEventBus.instance.on(SocketEvent.screenApproved, _handleSocketApproval);
+		SocketEventBus.instance.on(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
 		_init();
+	}
+
+	void _handleDeviceNotRegistered(dynamic _) {
+		if (!mounted) return;
+		unawaited(_reconfigure());
 	}
 
 	void _handleSocketApproval(dynamic _) {
@@ -56,7 +70,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 		setState(() => _hardwareKey = hardwareKey ?? '');
 
 		if (hardwareKey == null || hardwareKey.isEmpty) {
-			setState(() => _error = 'Hardware key missing. Use Reconfigure.');
+			setState(() => _error = 'Screen ID not found. Tap Edit Settings.');
 			return;
 		}
 
@@ -76,7 +90,8 @@ class _WaitingScreenState extends State<WaitingScreen> {
 
 		if (mounted) {
 			setState(() {
-				_statusMessage = 'Registering this device…';
+				_title = _connectingTitle;
+				_message = _connectingMessage;
 				_error = null;
 			});
 		}
@@ -106,7 +121,8 @@ class _WaitingScreenState extends State<WaitingScreen> {
 			if (mounted) {
 				setState(() {
 					_error = e.toString().replaceFirst('Exception: ', '');
-					_statusMessage = 'Could not register device. Tap Reconfigure to try again.';
+					_title = _connectingTitle;
+					_message = 'Could not connect your screen. Tap Edit Settings to try again.';
 				});
 			}
 		}
@@ -130,7 +146,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 			if (hardwareKey == null || hardwareKey.isEmpty) {
 				AppLogger.status('Poll skipped — hardware key missing');
 				if (mounted) {
-					setState(() => _error = 'Missing registration data. Use Reconfigure.');
+					setState(() => _error = 'Missing registration data. Tap Edit Settings.');
 				}
 				return;
 			}
@@ -152,8 +168,9 @@ class _WaitingScreenState extends State<WaitingScreen> {
 				AppLogger.status('Expired — stopping poll');
 				_pollTimer?.cancel();
 				setState(() {
-					_statusMessage = status.message;
-					_error = 'Registration expired. Reconnect to register again.';
+					_title = 'Registration Expired';
+					_message = 'Your screen registration has expired. Tap Edit Settings to connect again.';
+					_error = null;
 				});
 				return;
 			}
@@ -185,19 +202,24 @@ class _WaitingScreenState extends State<WaitingScreen> {
 
 			if (status.isProcessing) {
 				setState(() {
-					_statusMessage = _messageForStatus(status);
+					_applyStatusCopy(status);
 					_error = null;
 				});
 				return;
 			}
 
 			setState(() {
-				_statusMessage = _messageForStatus(status);
+				_applyStatusCopy(status);
 				_error = null;
 			});
 		} catch (e, st) {
 			AppLogger.status('Poll failed: $e');
 			debugPrint('[Status] stack: $st');
+			if (e is ScreenApiException && e.isNotRegistered) {
+				AppLogger.status('Device not registered — returning to connect screen');
+				await _reconfigure();
+				return;
+			}
 			if (mounted) {
 				setState(() => _error = 'Connection failed. Retrying…');
 			}
@@ -206,22 +228,14 @@ class _WaitingScreenState extends State<WaitingScreen> {
 		}
 	}
 
-	String _messageForStatus(ScreenStatusData status) {
+	void _applyStatusCopy(ScreenStatusData status) {
 		if (status.needsConnectFirst) {
-			return 'Registering this device…';
+			_title = _connectingTitle;
+			_message = _connectingMessage;
+			return;
 		}
-		if (status.message.isNotEmpty &&
-			!status.message.toLowerCase().contains('call post')) {
-			return status.message;
-		}
-		switch (status.status) {
-			case 'pending':
-				return 'Registration request received — completing setup…';
-			case 'processing':
-				return 'Waiting for admin approval…';
-			default:
-				return 'Waiting for admin approval…';
-		}
+		_title = _connectedTitle;
+		_message = _connectedMessage;
 	}
 
 	Future<void> _reconfigure() async {
@@ -236,6 +250,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 	@override
 	void dispose() {
 		SocketEventBus.instance.off(SocketEvent.screenApproved, _handleSocketApproval);
+		SocketEventBus.instance.off(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
 		_pollTimer?.cancel();
 		super.dispose();
 	}
@@ -262,13 +277,23 @@ class _WaitingScreenState extends State<WaitingScreen> {
 										const CircularProgressIndicator(color: AppConfig.accentOrange),
 										const SizedBox(height: 24),
 										Text(
-											_statusMessage,
-											style: const TextStyle(color: Colors.white, fontSize: 20),
+											_title,
+											style: const TextStyle(
+												color: Colors.white,
+												fontSize: 20,
+												fontWeight: FontWeight.bold,
+											),
+											textAlign: TextAlign.center,
+										),
+										const SizedBox(height: 12),
+										Text(
+											_message,
+											style: const TextStyle(color: Colors.white54, fontSize: 14),
 											textAlign: TextAlign.center,
 										),
 										const SizedBox(height: 32),
 										const Text(
-											'Hardware Key',
+											'Screen ID',
 											style: TextStyle(color: Colors.white54, fontSize: 14),
 										),
 										const SizedBox(height: 8),
@@ -289,7 +314,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 										const SizedBox(height: 48),
 										TextButton(
 											onPressed: _reconfigure,
-											child: const Text('Reconfigure', style: TextStyle(color: Colors.white54)),
+											child: const Text('Edit Settings', style: TextStyle(color: Colors.white54)),
 										),
 									],
 								),

@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../models/player_config.dart';
 import '../models/screen_connect_data.dart';
 
+const kApiBaseUrl = 'api_base_url';
 const kXmdsUrl = 'xmds_url';
 const kXmrUrl = 'xmr_url';
 const kCmsKey = 'cms_key';
@@ -125,6 +126,16 @@ class StorageService {
 		await p.setString(kHardwareKey, key);
 	}
 
+	Future<void> saveApiBaseUrl(String url) async {
+		final p = await prefs;
+		await p.setString(kApiBaseUrl, url);
+	}
+
+	Future<String?> loadApiBaseUrl() async {
+		final p = await prefs;
+		return p.getString(kApiBaseUrl);
+	}
+
 	Future<void> saveDisplayName(String name) async {
 		final p = await prefs;
 		await p.setString(kDisplayName, name);
@@ -183,9 +194,13 @@ class StorageService {
 	Future<void> clearAll() async {
 		final p = await prefs;
 		final hardwareKey = p.getString(kHardwareKey);
+		final apiBaseUrl = p.getString(kApiBaseUrl);
 		await p.clear();
 		if (hardwareKey != null) {
 			await p.setString(kHardwareKey, hardwareKey);
+		}
+		if (apiBaseUrl != null) {
+			await p.setString(kApiBaseUrl, apiBaseUrl);
 		}
 	}
 

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
@@ -12,11 +11,15 @@ class SocketService {
 
   IO.Socket? _socket;
   String? _hardwareKey;
+  String? _serverUrl;
   bool _isConnected = false;
-  bool _reconnectionPaused = false;
-  int _connectFailures = 0;
-  Timer? _backoffTimer;
+  bool _connecting = false;
+  bool _shuttingDown = false;
   DateTime? _lastReconnectCatchUp;
+  int _socketGeneration = 0;
+
+  /// Increments whenever [init] creates a new socket — listeners must re-register.
+  int get socketGeneration => _socketGeneration;
 
   final StreamController<bool> _connectionController =
       StreamController<bool>.broadcast();
@@ -52,19 +55,28 @@ class SocketService {
   }
 
   void init(String serverUrl, String hardwareKey) {
-    _hardwareKey = hardwareKey;
-    _cancelBackoff();
-    _connectFailures = 0;
-    _reconnectionPaused = false;
+    if (_socket != null &&
+        _serverUrl == normalizeServerUrl(serverUrl) &&
+        _hardwareKey == hardwareKey &&
+        !_shuttingDown) {
+      AppLogger.socket('Already initialized — keeping single socket connection');
+      if (!_isConnected && !_connecting) connect();
+      return;
+    }
 
-    final normalizedUrl = normalizeServerUrl(serverUrl);
-    AppLogger.socket('Connecting to $normalizedUrl');
+    _hardwareKey = hardwareKey;
+    _serverUrl = normalizeServerUrl(serverUrl);
+    _shuttingDown = false;
+
+    final normalizedUrl = _serverUrl!;
+    AppLogger.socket('Initializing socket $normalizedUrl hardwareKey=$hardwareKey');
 
     _socket?.dispose();
+    _socketGeneration++;
     _socket = IO.io(
       normalizedUrl,
       IO.OptionBuilder()
-          .setTransports(['websocket'])
+          .setTransports(['websocket', 'polling'])
           .setPath('/socket.io')
           .disableAutoConnect()
           .enableReconnection()
@@ -72,62 +84,81 @@ class SocketService {
           .setReconnectionDelay(AppConfig.socketReconnectDelayMs)
           .setReconnectionDelayMax(AppConfig.socketReconnectDelayMaxMs)
           .setRandomizationFactor(0.5)
+          .setQuery({'hardwareKey': hardwareKey})
+          .setAuth({'hardwareKey': hardwareKey})
           .build(),
     );
 
     _socket!.onConnect((_) {
-      _connectFailures = 0;
-      _reconnectionPaused = false;
-      _cancelBackoff();
+      _connecting = false;
       _isConnected = true;
       _connectionController.add(true);
       _identifyDevice();
-      AppLogger.socket('Connected');
+      AppLogger.socket(
+        'Connected socketId=${_socket?.id ?? "(pending)"} hardwareKey=$_hardwareKey',
+      );
     });
 
-    _socket!.onDisconnect((_) {
+    _socket!.onDisconnect((reason) {
+      _connecting = false;
       _isConnected = false;
       _connectionController.add(false);
-      AppLogger.socket('Disconnected');
+      AppLogger.socket('Disconnected reason=${reason ?? "unknown"}');
     });
 
     _socket!.onConnectError((err) {
-      _handleConnectFailure(err);
+      _connecting = false;
+      _isConnected = false;
+      AppLogger.socket('Connection error: ${err ?? "unknown"}');
     });
 
     _socket!.onReconnect((_) {
-      _connectFailures = 0;
-      _reconnectionPaused = false;
-      _cancelBackoff();
+      _connecting = false;
       _isConnected = true;
       _connectionController.add(true);
       _identifyDevice();
       _onReconnectThrottled();
-      AppLogger.socket('Reconnected');
+      AppLogger.socket(
+        'Reconnected socketId=${_socket?.id ?? "(pending)"} hardwareKey=$_hardwareKey',
+      );
+    });
+
+    _socket!.onAny((event, data) {
+      AppLogger.socketEventReceived(event, data);
+      if (AppConfig.isScreenshotSocketEvent(event)) {
+        AppLogger.screenshotEventReceived('Socket.io', event, data);
+      }
     });
   }
 
-  void connect() {
-    if (_reconnectionPaused) {
-      AppLogger.socket('Connect skipped — backoff active');
-      return;
-    }
-    _socket?.connect();
+  void onAny(void Function(String event, dynamic data) handler) {
+    _socket?.onAny(handler);
   }
 
-  /// Safe manual reconnect (e.g. app resume) — respects backoff pause.
-  void reconnectIfNeeded() {
-    if (_isConnected) return;
-    if (_reconnectionPaused) {
-      _scheduleBackoffReconnect();
+  /// No-op — listeners are registered once in [PlayerInitService.initialize].
+  void setOnReady(void Function() callback) {}
+
+  void connect() {
+    if (_shuttingDown || _socket == null) return;
+    if (_isConnected || _connecting) {
+      AppLogger.socket('Connect skipped — already connected or connecting');
       return;
     }
+    _connecting = true;
+    AppLogger.socket('Connecting...');
+    _socket!.connect();
+  }
+
+  /// Safe manual reconnect (e.g. app resume) — only if actually disconnected.
+  void reconnectIfNeeded() {
+    if (_shuttingDown || _isConnected || _connecting) return;
     connect();
   }
 
   void disconnect() {
-    _cancelBackoff();
-    _socket?.disconnect();
+    if (_socket == null) return;
+    _connecting = false;
+    _socket!.disconnect();
     _isConnected = false;
     _connectionController.add(false);
   }
@@ -135,62 +166,15 @@ class SocketService {
   /// Permanent shutdown on app kill — disables reconnect and releases the socket.
   void shutdown() {
     AppLogger.socket('Shutdown — disconnecting permanently');
-    _cancelBackoff();
-    _reconnectionPaused = true;
+    _shuttingDown = true;
+    _connecting = false;
     _setManagerReconnection(false);
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;
+    _serverUrl = null;
     _isConnected = false;
     _connectionController.add(false);
-  }
-
-  void _handleConnectFailure(dynamic err) {
-    _connectFailures++;
-    final errStr = err?.toString() ?? '';
-    AppLogger.socket('Connection error (#$_connectFailures): $errStr');
-
-    final permanentFailure =
-        errStr.contains('404') ||
-        errStr.contains('403') ||
-        errStr.contains('not upgraded');
-
-    if (permanentFailure ||
-        _connectFailures >= AppConfig.socketMaxFailuresBeforePause) {
-      _pauseAutoReconnection();
-      _scheduleBackoffReconnect();
-    }
-  }
-
-  void _pauseAutoReconnection() {
-    if (_reconnectionPaused) return;
-    _reconnectionPaused = true;
-    _setManagerReconnection(false);
-    _socket?.disconnect();
-    AppLogger.socket('Auto-reconnect paused (failures=$_connectFailures)');
-  }
-
-  void _scheduleBackoffReconnect() {
-    _cancelBackoff();
-    final exponent = math.min(_connectFailures, 8);
-    final delayMs = math.min(
-      AppConfig.socketBackoffMaxMs,
-      AppConfig.socketBackoffBaseMs * math.pow(2, exponent).toInt(),
-    );
-    AppLogger.socket('Next reconnect attempt in ${delayMs ~/ 1000}s');
-
-    _backoffTimer = Timer(Duration(milliseconds: delayMs), () {
-      if (_socket == null) return;
-      _reconnectionPaused = false;
-      _setManagerReconnection(true);
-      AppLogger.socket('Backoff reconnect attempt');
-      _socket?.connect();
-    });
-  }
-
-  void _cancelBackoff() {
-    _backoffTimer?.cancel();
-    _backoffTimer = null;
   }
 
   void _setManagerReconnection(bool enabled) {
@@ -203,13 +187,22 @@ class SocketService {
   }
 
   void _identifyDevice() {
-    if (_hardwareKey != null && _hardwareKey!.isNotEmpty) {
-      _socket?.emit('screen:identify', {'hardwareKey': _hardwareKey});
-    }
+    if (_hardwareKey == null || _hardwareKey!.isEmpty) return;
+
+    final payload = {
+      'hardwareKey': _hardwareKey,
+      'clientType': AppConfig.clientType,
+      'clientVersion': AppConfig.clientVersion,
+    };
+    _socket?.emit('screen:identify', payload);
+    AppLogger.socket('→ emitted screen:identify $payload');
   }
 
   /// Re-assert online status after returning from background.
-  void reIdentify() => _identifyDevice();
+  void reIdentify() {
+    if (!_isConnected) return;
+    _identifyDevice();
+  }
 
   /// Tells the server to mark this screen offline immediately (home button / app kill).
   void emitGoingOffline() {
@@ -244,15 +237,16 @@ class SocketService {
     _socket?.on(event, handler);
   }
 
-  void off(String event) {
-    _socket?.off(event);
+  void off(String event, [Function(dynamic)? handler]) {
+    if (handler != null) {
+      _socket?.off(event, handler);
+    } else {
+      _socket?.off(event);
+    }
   }
 
   void dispose() {
-    _cancelBackoff();
-    disconnect();
-    _socket?.dispose();
-    _socket = null;
+    shutdown();
   }
 }
 
@@ -263,6 +257,8 @@ enum SocketEvent {
   scheduleActivated,
   schedulePaused,
   reconnected,
+  screenshotRequested,
+  deviceNotRegistered,
 }
 
 class SocketEventBus {

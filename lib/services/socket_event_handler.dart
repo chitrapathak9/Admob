@@ -1,6 +1,8 @@
+import '../config/app_config.dart';
 import '../models/screen_status_data.dart';
 import '../utils/app_logger.dart';
 import 'download_service.dart';
+import 'screenshot_service.dart';
 import 'screen_service.dart';
 import 'socket_service.dart';
 import 'storage_service.dart';
@@ -17,30 +19,66 @@ class SocketEventHandler {
 		_screenService = screenService ?? ScreenService.instance,
 		_downloadService = downloadService ?? DownloadService.instance;
 
+	static const _screenshotSocketEvents = AppConfig.screenshotSocketEvents;
+
 	final SocketService _socketService;
 	final XmdsService _xmdsService;
 	final ScreenService _screenService;
 	final DownloadService _downloadService;
+	bool _registered = false;
+	int _registeredOnGeneration = -1;
 
 	void registerAll() {
+		final generation = _socketService.socketGeneration;
+		if (_registered && _registeredOnGeneration == generation) {
+			AppLogger.socket('Socket listeners already registered — skip');
+			return;
+		}
+		if (_registered) {
+			unregisterAll();
+		}
+		_registered = true;
+		_registeredOnGeneration = generation;
 		_onScreenApproved();
 		_onSyncNow();
 		_onContentUpdated();
 		_onScheduleActivated();
 		_onSchedulePaused();
+		_onScreenshotRequested();
+		_onWrappedScreenEvents();
+		_onScreenshotCatchAll();
+		AppLogger.socket('All socket event listeners registered (socketGen=$generation)');
 	}
 
 	void unregisterAll() {
+		if (!_registered) return;
+		_registered = false;
+		_registeredOnGeneration = -1;
 		_socketService.off('screen:approved');
 		_socketService.off('sync:now');
 		_socketService.off('content:updated');
 		_socketService.off('schedule:activated');
 		_socketService.off('schedule:paused');
+		for (final event in _screenshotSocketEvents) {
+			_socketService.off(event);
+		}
+		for (final event in _wrappedScreenEvents) {
+			_socketService.off(event);
+		}
 	}
+
+	static const _wrappedScreenEvents = [
+		'message',
+		'screen:event',
+		'player:event',
+		'command',
+		'screen:command',
+		'player:command',
+	];
 
 	void _onScreenApproved() {
 		_socketService.on('screen:approved', (data) async {
-			AppLogger.socket('screen:approved received');
+			AppLogger.socketEventReceived('screen:approved', data);
 			await _safe(() async {
 				await refreshScreenStatus();
 				await _registerAndSyncAfterApproval();
@@ -51,7 +89,7 @@ class SocketEventHandler {
 
 	void _onSyncNow() {
 		_socketService.on('sync:now', (data) async {
-			AppLogger.socket('sync:now received');
+			AppLogger.socketEventReceived('sync:now', data);
 			await _safe(() async {
 				await _syncRequiredFilesAndDownload();
 				await _xmdsService.getSchedule();
@@ -62,7 +100,7 @@ class SocketEventHandler {
 
 	void _onContentUpdated() {
 		_socketService.on('content:updated', (data) async {
-			AppLogger.socket('content:updated received');
+			AppLogger.socketEventReceived('content:updated', data);
 			await _safe(() async {
 				await _syncRequiredFilesAndDownload();
 				SocketEventBus.instance.emit(SocketEvent.contentUpdated, data);
@@ -72,7 +110,7 @@ class SocketEventHandler {
 
 	void _onScheduleActivated() {
 		_socketService.on('schedule:activated', (data) async {
-			AppLogger.socket('schedule:activated received');
+			AppLogger.socketEventReceived('schedule:activated', data);
 			await _safe(() async {
 				await _xmdsService.getSchedule();
 				SocketEventBus.instance.emit(SocketEvent.scheduleActivated, data);
@@ -82,7 +120,7 @@ class SocketEventHandler {
 
 	void _onSchedulePaused() {
 		_socketService.on('schedule:paused', (data) async {
-			AppLogger.socket('schedule:paused received');
+			AppLogger.socketEventReceived('schedule:paused', data);
 			await _safe(() async {
 				await _xmdsService.getSchedule();
 				SocketEventBus.instance.emit(SocketEvent.schedulePaused, data);
@@ -90,16 +128,96 @@ class SocketEventHandler {
 		});
 	}
 
+	void _onScreenshotRequested() {
+		for (final event in _screenshotSocketEvents) {
+			_socketService.off(event);
+			_socketService.on(event, (data) async {
+				AppLogger.screenshotEventReceived('Socket.io', event, data);
+				await _handleScreenshotEvent(event, data);
+			});
+			AppLogger.screenshotEvent('READY — listening for socket event: $event (not received yet)');
+		}
+	}
+
+	Future<void> _handleScreenshotEvent(String event, dynamic data) async {
+		final requestId = _readRequestId(data);
+		AppLogger.screenshotEvent(
+			'Step 1 — handling event="$event" requestId=${requestId ?? "(none)"}',
+		);
+		await _safe(() async {
+			await ScreenshotService.instance.captureAndUpload(requestId: requestId);
+			SocketEventBus.instance.emit(SocketEvent.screenshotRequested, data);
+			AppLogger.screenshotEvent('Step 3 DONE — event="$event" handled');
+		});
+	}
+
+	void _onWrappedScreenEvents() {
+		for (final wrapper in _wrappedScreenEvents) {
+			_socketService.off(wrapper);
+			_socketService.on(wrapper, (data) async {
+				AppLogger.socketEventReceived(wrapper, data);
+				final innerEvent = _readInnerEventName(data);
+				if (innerEvent == null) return;
+				if (!_isScreenshotEventName(innerEvent)) return;
+				AppLogger.screenshotEvent('Step 1 — wrapped event "$wrapper" inner="$innerEvent"');
+				await _handleScreenshotEvent(innerEvent, _readInnerPayload(data));
+			});
+			AppLogger.screenshotEvent('READY — listening for wrapped event: $wrapper (not received yet)');
+		}
+	}
+
+	/// Handles screenshot events whose top-level name is not in [AppConfig.screenshotSocketEvents].
+	void _onScreenshotCatchAll() {
+		_socketService.onAny((event, data) async {
+			if (_screenshotSocketEvents.contains(event)) return;
+			if (!_isScreenshotEventName(event)) return;
+			AppLogger.screenshotEvent('Step 1 — catch-all direct event "$event"');
+			await _handleScreenshotEvent(event, data);
+		});
+	}
+
+	String? _readInnerEventName(dynamic data) {
+		if (data is! Map) return null;
+		final event = data['event'] ?? data['type'] ?? data['action'] ?? data['command'] ?? data['name'];
+		if (event == null) return null;
+		final value = event.toString().trim();
+		return value.isEmpty ? null : value;
+	}
+
+	dynamic _readInnerPayload(dynamic data) {
+		if (data is! Map) return data;
+		return data['data'] ?? data['payload'] ?? data;
+	}
+
+	bool _isScreenshotEventName(String name) => AppConfig.isScreenshotSocketEvent(name);
+
+	String? _readRequestId(dynamic data) {
+		if (data is! Map) return null;
+		final requestId = data['requestId'];
+		if (requestId == null) return null;
+		final value = requestId.toString().trim();
+		return value.isEmpty ? null : value;
+	}
+
 	Future<ScreenStatusData?> refreshScreenStatus() async {
 		final hardwareKey = await StorageService.instance.loadHardwareKey();
 		if (hardwareKey == null || hardwareKey.isEmpty) return null;
 
-		final status = await _screenService.getStatus(hardwareKey);
-		await StorageService.instance.saveRegistrationStatus(status.status);
-		if (status.isApprovedOrActive) {
-			await StorageService.instance.setApproved(true);
+		try {
+			final status = await _screenService.getStatus(hardwareKey);
+			await StorageService.instance.saveRegistrationStatus(status.status);
+			if (status.isApprovedOrActive) {
+				await StorageService.instance.setApproved(true);
+			}
+			return status;
+		} on ScreenApiException catch (e) {
+			if (e.isNotRegistered) {
+				AppLogger.status('Device not registered — clearing local registration');
+				await StorageService.instance.clearAll();
+				SocketEventBus.instance.emit(SocketEvent.deviceNotRegistered, e);
+			}
+			rethrow;
 		}
-		return status;
 	}
 
 	Future<void> _registerAndSyncAfterApproval() async {

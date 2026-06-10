@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
 import '../models/screen_connect_data.dart';
+import '../services/api_url_service.dart';
 import '../services/screen_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmds_service.dart';
@@ -21,22 +22,27 @@ class SetupScreen extends StatefulWidget {
 
 class _SetupScreenState extends State<SetupScreen> {
 	final _screenNameController = TextEditingController();
+	final _apiUrlController = TextEditingController();
 	bool _loading = false;
 	String? _error;
 
 	@override
 	void initState() {
 		super.initState();
-		_loadDeviceName();
+		_loadInitialValues();
 	}
 
-	Future<void> _loadDeviceName() async {
+	Future<void> _loadInitialValues() async {
+		final storage = StorageService.instance;
+		final savedApiUrl = await storage.loadApiBaseUrl();
+		_apiUrlController.text = savedApiUrl ?? AppConfig.defaultBaseUrl;
 		_screenNameController.text = await defaultDisplayName();
 	}
 
 	@override
 	void dispose() {
 		_screenNameController.dispose();
+		_apiUrlController.dispose();
 		super.dispose();
 	}
 
@@ -68,9 +74,14 @@ class _SetupScreenState extends State<SetupScreen> {
 
 	Future<void> _connect() async {
 		final screenName = _screenNameController.text.trim();
+		final apiUrl = _apiUrlController.text.trim();
 
 		if (screenName.isEmpty) {
 			setState(() => _error = 'Please enter a screen name');
+			return;
+		}
+		if (apiUrl.isEmpty) {
+			setState(() => _error = 'Please enter a server address');
 			return;
 		}
 
@@ -80,6 +91,8 @@ class _SetupScreenState extends State<SetupScreen> {
 		});
 
 		try {
+			await ApiUrlService.instance.setBaseUrl(apiUrl);
+
 			final storage = StorageService.instance;
 			final hardwareKey = await storage.getOrCreateHardwareKey();
 
@@ -142,17 +155,23 @@ class _SetupScreenState extends State<SetupScreen> {
 									TheadbookLogo(height: logoHeight),
 									const SizedBox(height: 32),
 									Text(
-										'Connect this screen to theadbook',
+										'Connect Your Screen',
 										style: TextStyle(color: Colors.white, fontSize: titleSize),
 										textAlign: TextAlign.center,
 									),
 									const SizedBox(height: 12),
 									const Text(
-										'Your screen will appear in the admin panel for approval.',
+										'Enter the details below to connect this screen to your account.',
 										style: TextStyle(color: Colors.white54, fontSize: 14),
 										textAlign: TextAlign.center,
 									),
 									const SizedBox(height: 40),
+									_buildField(
+										label: 'Server Address',
+										controller: _apiUrlController,
+										keyboardType: TextInputType.url,
+									),
+									const SizedBox(height: 16),
 									_buildField(
 										label: 'Screen Name',
 										controller: _screenNameController,
@@ -181,7 +200,7 @@ class _SetupScreenState extends State<SetupScreen> {
 													height: 24,
 													child: CircularProgressIndicator(strokeWidth: 2),
 												)
-												: const Text('Connect Screen', style: TextStyle(fontSize: 18)),
+												: const Text('Continue', style: TextStyle(fontSize: 18)),
 										),
 									),
 								],
@@ -193,9 +212,14 @@ class _SetupScreenState extends State<SetupScreen> {
 		);
 	}
 
-	Widget _buildField({required String label, required TextEditingController controller}) {
+	Widget _buildField({
+		required String label,
+		required TextEditingController controller,
+		TextInputType keyboardType = TextInputType.text,
+	}) {
 		return TextField(
 			controller: controller,
+			keyboardType: keyboardType,
 			style: const TextStyle(color: Colors.white),
 			decoration: InputDecoration(
 				labelText: label,

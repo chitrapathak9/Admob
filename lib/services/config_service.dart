@@ -18,6 +18,10 @@ class ConfigService {
     ),
   )..interceptors.add(ApiLogInterceptor());
 
+  void updateBaseUrl() {
+    _dio.options.baseUrl = AppConfig.baseUrl;
+  }
+
   Future<PlayerConfig> fetchConfig() async {
     AppLogger.config('fetchConfig');
 

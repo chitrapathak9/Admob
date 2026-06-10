@@ -48,13 +48,13 @@ class PlayerInitService with WidgetsBindingObserver {
 
     final hardwareKey = await StorageService.instance.getOrCreateHardwareKey();
     _socketService.init(serverUrl, hardwareKey);
-    _socketService.connect();
     _eventHandler.registerAll();
+    _socketService.connect();
     _registerReconnectListener();
     _initialized = true;
 
     AppLogger.socket(
-      'Initialized serverUrl=$serverUrl hardwareKey=$hardwareKey',
+      'Initialized serverUrl=$serverUrl apiBaseUrl=${AppConfig.baseUrl} hardwareKey=$hardwareKey',
     );
 
     unawaited(_checkInitialScreenStatus(hardwareKey));
@@ -83,6 +83,12 @@ class PlayerInitService with WidgetsBindingObserver {
 
       await XmdsService.instance.registerDisplay(displayName);
       await _eventHandler.catchUpAfterReconnect();
+    } on ScreenApiException catch (e) {
+      if (e.isNotRegistered) {
+        AppLogger.status('Initial status: device not registered');
+        await StorageService.instance.clearAll();
+        SocketEventBus.instance.emit(SocketEvent.deviceNotRegistered, e);
+      }
     } catch (e, st) {
       AppLogger.apiError('Socket', 'Initial status check failed', e, st);
     }
@@ -95,17 +101,17 @@ class PlayerInitService with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.resumed:
         HeartbeatService.instance.resumeFromBackground();
-        AppLogger.heartbeat('App foreground — heartbeat active, socket reconnect if needed');
-        if (_socketService.isConnected) {
-          _socketService.reIdentify();
-        } else {
+        if (!_socketService.isConnected) {
+          AppLogger.socket('App foreground — reconnecting socket');
           _socketService.reconnectIfNeeded();
+        } else {
+          _socketService.reIdentify();
         }
       case AppLifecycleState.paused:
         unawaited(_handleBackground());
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
-        AppLogger.heartbeat('App backgrounded — socket stays connected');
+        break;
       case AppLifecycleState.detached:
         unawaited(_shutdownConnections());
     }
@@ -113,17 +119,8 @@ class PlayerInitService with WidgetsBindingObserver {
 
   Future<void> _handleBackground() async {
     HeartbeatService.instance.pauseForBackground();
-    AppLogger.offline('[BG] App paused — calling offline API before background notify');
-
-    final offlineOk = await PlayerService.instance.markScreenOffline();
-    if (!offlineOk) {
-      AppLogger.offline('[BG] Offline API failed — skipping screen:going_offline emit');
-      return;
-    }
-
-    AppLogger.offline('[BG] Offline API OK — emitting screen:going_offline');
-    await _socketService.emitGoingOfflineAndFlush();
-    AppLogger.offline('[BG] Background offline flow complete');
+    AppLogger.offline('[BG] App paused — REST offline only, socket stays connected');
+    await PlayerService.instance.markScreenOffline();
   }
 
   Future<void> _notifyServerOffline({required bool disconnectAfter}) async {
