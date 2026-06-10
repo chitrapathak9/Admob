@@ -80,7 +80,7 @@ class SocketService {
     _socket = IO.io(
       normalizedUrl,
       IO.OptionBuilder()
-          .setTransports(['websocket'])    // websocket-only — no polling upgrade dance
+          .setTransports(['websocket', 'polling']) // Allow polling fallback like the web client
           .setPath('/socket.io')
           .disableAutoConnect()
           .enableReconnection()
