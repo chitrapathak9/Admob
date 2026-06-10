@@ -94,22 +94,23 @@ class SocketService {
       _isConnected = true;
       _connectionController.add(true);
       _identifyDevice();
-      AppLogger.socket(
-        'Connected socketId=${_socket?.id ?? "(pending)"} hardwareKey=$_hardwareKey',
-      );
+      AppLogger.socketConnect('connect', {
+        'socketId': _socket?.id ?? "(pending)",
+        'hardwareKey': _hardwareKey,
+      });
     });
 
     _socket!.onDisconnect((reason) {
       _connecting = false;
       _isConnected = false;
       _connectionController.add(false);
-      AppLogger.socket('Disconnected reason=${reason ?? "unknown"}');
+      AppLogger.socketDisconnect('disconnect', {'reason': reason ?? "unknown"});
     });
 
     _socket!.onConnectError((err) {
       _connecting = false;
       _isConnected = false;
-      AppLogger.socket('Connection error: ${err ?? "unknown"}');
+      AppLogger.socketDisconnect('connect_error', {'error': err?.toString() ?? "unknown"});
     });
 
     _socket!.onReconnect((_) {
@@ -118,9 +119,10 @@ class SocketService {
       _connectionController.add(true);
       _identifyDevice();
       _onReconnectThrottled();
-      AppLogger.socket(
-        'Reconnected socketId=${_socket?.id ?? "(pending)"} hardwareKey=$_hardwareKey',
-      );
+      AppLogger.socketConnect('reconnect', {
+        'socketId': _socket?.id ?? "(pending)",
+        'hardwareKey': _hardwareKey,
+      });
     });
 
     _socket!.onAny((event, data) {
@@ -195,7 +197,7 @@ class SocketService {
       'clientVersion': AppConfig.clientVersion,
     };
     _socket?.emit('screen:identify', payload);
-    AppLogger.socket('→ emitted screen:identify $payload');
+    AppLogger.socketEmit('screen:identify', payload);
   }
 
   /// Re-assert online status after returning from background.
@@ -207,8 +209,9 @@ class SocketService {
   /// Tells the server to mark this screen offline immediately (home button / app kill).
   void emitGoingOffline() {
     if (_hardwareKey == null || _hardwareKey!.isEmpty) return;
-    _socket?.emit('screen:going_offline', {'hardwareKey': _hardwareKey});
-    AppLogger.socket('Emitted screen:going_offline hardwareKey=$_hardwareKey');
+    final payload = {'hardwareKey': _hardwareKey};
+    _socket?.emit('screen:going_offline', payload);
+    AppLogger.socketEmit('screen:going_offline', payload);
   }
 
   /// Emit offline event then wait so the packet can reach the server before disconnect.

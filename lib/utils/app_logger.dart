@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 /// Tagged debug logs. Filter screenshot flow in logcat:
@@ -35,12 +36,51 @@ class AppLogger {
 		_error('ScreenAPI', message, error, stack);
 	}
 
+	static const String _socketSep = '════════════════════════════════════════════════════════════════════════════════';
+
+	static void socketDetailed(String dir, String actor, String event, dynamic payload) {
+		final symbol = dir == 'IN' ? '📥 INCOMING' : dir == 'OUT' ? '📤 OUTGOING' : dir == 'CONN' ? '🔌 CONNECT ' : '❌ DISCONN ';
+		
+		String payloadStr = '(none)';
+		if (payload != null) {
+			try {
+				if (payload is String) {
+					payloadStr = payload;
+				} else {
+					payloadStr = const JsonEncoder.withIndent('  ').convert(payload);
+				}
+			} catch (_) {
+				payloadStr = payload.toString();
+			}
+		}
+		
+		final indentedPayload = payloadStr.split('\n').join('\n  ');
+		
+		debugPrint(
+			'\n$_socketSep\n'
+			'  [SOCKET $symbol]  $actor\n'
+			'  Event   : $event\n'
+			'  Payload : $indentedPayload\n'
+			'$_socketSep'
+		);
+	}
+
 	/// Log when any socket.io event arrives from the server.
 	static void socketEventReceived(String event, dynamic data) {
-		_log(
-			'Socket',
-			'>>> RECEIVED event="$event" payload=${truncate(data?.toString())}',
-		);
+		socketDetailed('IN', 'BACKEND → MOBILE', event, data);
+	}
+
+	/// Log when the mobile app emits an event to the server.
+	static void socketEmit(String event, dynamic data) {
+		socketDetailed('OUT', 'MOBILE → BACKEND', event, data);
+	}
+
+	static void socketConnect(String event, [dynamic data]) {
+		socketDetailed('CONN', 'SERVER', event, data);
+	}
+
+	static void socketDisconnect(String event, [dynamic data]) {
+		socketDetailed('DISC', 'SERVER', event, data);
 	}
 
 	/// Log when a screenshot trigger event arrives (socket or XMR).

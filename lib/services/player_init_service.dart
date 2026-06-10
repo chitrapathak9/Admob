@@ -13,6 +13,7 @@ import 'socket_service.dart';
 import 'storage_service.dart';
 import 'xmds_service.dart';
 import 'xmr_service.dart';
+import 'api_url_service.dart';
 
 class PlayerInitService with WidgetsBindingObserver {
   PlayerInitService._();
@@ -45,6 +46,10 @@ class PlayerInitService with WidgetsBindingObserver {
         serverUrl = cached.playerDomain!;
       }
     }
+
+    // Propagate the resolved server URL to ALL Dio clients so REST calls
+    // (screenshot upload, status, heartbeat) hit the same host as the socket.
+    await ApiUrlService.instance.setBaseUrl(serverUrl);
 
     final hardwareKey = await StorageService.instance.getOrCreateHardwareKey();
     _socketService.init(serverUrl, hardwareKey);
