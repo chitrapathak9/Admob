@@ -70,7 +70,9 @@ class PlayerInitService with WidgetsBindingObserver {
     _reconnectListenerRegistered = true;
 
     SocketEventBus.instance.on(SocketEvent.reconnected, (_) async {
-      AppLogger.socket('Reconnect catch-up');
+      AppLogger.socket('Reconnect catch-up — re-registering listeners + syncing');
+      // Socket generation bumps on reconnect — re-register listeners
+      _eventHandler.registerAll();
       await _eventHandler.catchUpAfterReconnect();
     });
   }
@@ -106,11 +108,20 @@ class PlayerInitService with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.resumed:
         HeartbeatService.instance.resumeFromBackground();
-        if (!_socketService.isConnected) {
-          AppLogger.socket('App foreground — reconnecting socket');
-          _socketService.reconnectIfNeeded();
+        // Android Doze mode can silently kill the socket while backgrounded.
+        // Always validate the actual transport state, not just our flag.
+        if (!_socketService.isActuallyConnected) {
+          AppLogger.socket('App foreground — socket dead, forcing reconnect');
+          _socketService.forceReconnect();
+          // Re-register listeners after reconnect (generation bumped)
+          Future<void>.delayed(const Duration(milliseconds: 500), () {
+            _eventHandler.registerAll();
+          });
         } else {
+          // Socket is alive — just re-identify to confirm room membership
           _socketService.reIdentify();
+          // Re-register listeners in case generation changed during background
+          _eventHandler.registerAll();
         }
       case AppLifecycleState.paused:
         unawaited(_handleBackground());

@@ -17,6 +17,10 @@ class SocketService {
   bool _shuttingDown = false;
   DateTime? _lastReconnectCatchUp;
   int _socketGeneration = 0;
+  Timer? _reIdentifyTimer;
+
+  /// Interval for periodic re-identify to keep room membership alive.
+  static const _reIdentifyIntervalSeconds = 120; // 2 minutes
 
   /// Increments whenever [init] creates a new socket — listeners must re-register.
   int get socketGeneration => _socketGeneration;
@@ -94,6 +98,7 @@ class SocketService {
       _isConnected = true;
       _connectionController.add(true);
       _identifyDevice();
+      _startReIdentifyTimer();
       AppLogger.socketConnect('connect', {
         'socketId': _socket?.id ?? "(pending)",
         'hardwareKey': _hardwareKey,
@@ -103,6 +108,7 @@ class SocketService {
     _socket!.onDisconnect((reason) {
       _connecting = false;
       _isConnected = false;
+      _stopReIdentifyTimer();
       _connectionController.add(false);
       AppLogger.socketDisconnect('disconnect', {'reason': reason ?? "unknown"});
     });
@@ -117,11 +123,15 @@ class SocketService {
       _connecting = false;
       _isConnected = true;
       _connectionController.add(true);
+      // Bump generation so SocketEventHandler re-registers listeners
+      _socketGeneration++;
       _identifyDevice();
+      _startReIdentifyTimer();
       _onReconnectThrottled();
       AppLogger.socketConnect('reconnect', {
         'socketId': _socket?.id ?? "(pending)",
         'hardwareKey': _hardwareKey,
+        'socketGeneration': _socketGeneration,
       });
     });
 
@@ -160,9 +170,45 @@ class SocketService {
   void disconnect() {
     if (_socket == null) return;
     _connecting = false;
+    _stopReIdentifyTimer();
     _socket!.disconnect();
     _isConnected = false;
     _connectionController.add(false);
+  }
+
+  /// Force disconnect + reconnect — use on app resume to ensure fresh connection.
+  /// Bumps socket generation so [SocketEventHandler] re-registers listeners.
+  void forceReconnect() {
+    if (_shuttingDown || _socket == null) return;
+    AppLogger.socket('forceReconnect — tearing down and reconnecting');
+    _stopReIdentifyTimer();
+    _socket!.disconnect();
+    _isConnected = false;
+    _connecting = false;
+    _connectionController.add(false);
+    // Small delay so disconnect packet flushes before reconnect
+    Future<void>.delayed(const Duration(milliseconds: 300), () {
+      if (_shuttingDown) return;
+      connect();
+    });
+  }
+
+  /// Check whether the socket is actually connected at the transport level.
+  /// The [_isConnected] flag may be stale if Android killed the socket silently.
+  bool get isActuallyConnected {
+    if (_socket == null) return false;
+    return _socket!.connected;
+  }
+
+  /// Validate connection and reconnect if the internal state is stale.
+  void ensureConnected() {
+    if (_shuttingDown || _socket == null) return;
+    if (!isActuallyConnected) {
+      AppLogger.socket('ensureConnected — socket claims connected but transport is dead, forcing reconnect');
+      _isConnected = false;
+      _connecting = false;
+      forceReconnect();
+    }
   }
 
   /// Permanent shutdown on app kill — disables reconnect and releases the socket.
@@ -170,6 +216,7 @@ class SocketService {
     AppLogger.socket('Shutdown — disconnecting permanently');
     _shuttingDown = true;
     _connecting = false;
+    _stopReIdentifyTimer();
     _setManagerReconnection(false);
     _socket?.disconnect();
     _socket?.dispose();
@@ -220,6 +267,26 @@ class SocketService {
     await Future<void>.delayed(
       Duration(milliseconds: AppConfig.offlineNotifyFlushMs),
     );
+  }
+
+  // ── Periodic re-identify to keep room membership alive ──────────────────────
+
+  void _startReIdentifyTimer() {
+    _stopReIdentifyTimer();
+    _reIdentifyTimer = Timer.periodic(
+      const Duration(seconds: _reIdentifyIntervalSeconds),
+      (_) {
+        if (_isConnected && !_shuttingDown) {
+          AppLogger.socket('Periodic re-identify (keep-alive)');
+          _identifyDevice();
+        }
+      },
+    );
+  }
+
+  void _stopReIdentifyTimer() {
+    _reIdentifyTimer?.cancel();
+    _reIdentifyTimer = null;
   }
 
   void _onReconnectThrottled() {
