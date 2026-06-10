@@ -80,7 +80,7 @@ class SocketService {
     _socket = IO.io(
       normalizedUrl,
       IO.OptionBuilder()
-          .setTransports(['websocket', 'polling'])
+          .setTransports(['websocket'])    // websocket-only — no polling upgrade dance
           .setPath('/socket.io')
           .disableAutoConnect()
           .enableReconnection()
@@ -88,6 +88,7 @@ class SocketService {
           .setReconnectionDelay(AppConfig.socketReconnectDelayMs)
           .setReconnectionDelayMax(AppConfig.socketReconnectDelayMaxMs)
           .setRandomizationFactor(0.5)
+          .setTimeout(20000)              // 20 s connection timeout
           .setQuery({'hardwareKey': hardwareKey})
           .setAuth({'hardwareKey': hardwareKey})
           .build(),

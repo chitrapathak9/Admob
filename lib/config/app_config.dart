@@ -56,8 +56,8 @@ class AppConfig {
 
   /// Socket.io: built-in reconnect cap and delays (ms).
   static const int socketReconnectAttempts = 999;
-  static const int socketReconnectDelayMs = 3000;
-  static const int socketReconnectDelayMaxMs = 120000;
+  static const int socketReconnectDelayMs = 2000;
+  static const int socketReconnectDelayMaxMs = 30000;
   static const int socketBackoffBaseMs = 10000;
   static const int socketBackoffMaxMs = 300000;
   static const int socketMaxFailuresBeforePause = 5;
