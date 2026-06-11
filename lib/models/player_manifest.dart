@@ -45,6 +45,8 @@ class PlayerManifest {
 	final String groupName;
 	final String manifestHash;
 	final int collectionInterval;
+	/// Max MB the /media/ dir may use before stale files are pruned. Backend-controlled via STORAGE_THRESHOLD_MB env.
+	final int storageThresholdMb;
 	final Map<String, dynamic>? schedule;
 	final List<ManifestMediaItem> media;
 
@@ -54,6 +56,7 @@ class PlayerManifest {
 		required this.groupName,
 		required this.manifestHash,
 		required this.collectionInterval,
+		this.storageThresholdMb = 1024,
 		this.schedule,
 		required this.media,
 	});
@@ -67,6 +70,7 @@ class PlayerManifest {
 			groupName: data['groupName'] as String? ?? '',
 			manifestHash: data['manifestHash'] as String? ?? '',
 			collectionInterval: (data['collectionInterval'] as num?)?.toInt() ?? 60,
+			storageThresholdMb: (data['storageThresholdMb'] as num?)?.toInt() ?? 1024,
 			schedule: data['schedule'] as Map<String, dynamic>?,
 			media: mediaJson
 				.map((e) => ManifestMediaItem.fromJson(e as Map<String, dynamic>))

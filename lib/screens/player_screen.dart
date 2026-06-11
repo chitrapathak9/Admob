@@ -14,6 +14,7 @@ import '../services/heartbeat_service.dart';
 import '../services/player_service.dart';
 import '../services/screenshot_service.dart';
 import '../services/socket_service.dart';
+import '../services/storage_cleanup_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmr_service.dart';
 import '../utils/app_logger.dart';
@@ -82,6 +83,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _bootstrap() async {
+    StorageCleanupService.instance.start();
     await _initPlayer();
     if (!mounted) return;
 
@@ -124,6 +126,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       await DownloadService.instance.downloadManifestMedia(manifest.media);
       final playlist = await _buildPlaylistFromManifest(manifest);
       _mediaReady = playlist.length;
+
+      // Layer 1 (threshold) checked here; content hasn't changed yet on first load.
+      StorageCleanupService.instance.onManifestUpdated(manifest, contentChanged: false);
 
       if (playlist.isEmpty) {
         if (!mounted) return false;
@@ -314,6 +319,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
 
       await DownloadService.instance.downloadManifestMedia(manifest.media);
+      // Layer 1 (threshold) + Layer 2 (campaign end) — contentChanged when hash differs.
+      StorageCleanupService.instance.onManifestUpdated(
+        manifest,
+        contentChanged: manifest.manifestHash != previousHash,
+      );
       final newPlaylist = await _buildPlaylistFromManifest(manifest);
 
       _manifestHash = manifest.manifestHash;
@@ -417,6 +427,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _retryTimer?.cancel();
     _noContentTimer?.cancel();
     XmrService.instance.dispose();
+    StorageCleanupService.instance.stop();
     WakelockPlus.disable();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();

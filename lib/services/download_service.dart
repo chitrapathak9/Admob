@@ -443,14 +443,52 @@ class DownloadService {
 		return (await computeDownloadProgress(requiredFiles)).campaignMediaReady;
 	}
 
-	Future<int> getFreeSpaceMB() async {
+	/// Total MB used by files inside our /media/ directory.
+	Future<int> getMediaDirUsedMB() async {
 		try {
-			final dir = await getAppStorageDir();
-			final stat = await dir.stat();
-			return (stat.size / (1024 * 1024)).floor().clamp(0, 999999);
+			final appDir = await getAppStorageDir();
+			final mediaDir = Directory('${appDir.path}/media');
+			if (!await mediaDir.exists()) return 0;
+			int totalBytes = 0;
+			await for (final entity in mediaDir.list(recursive: false)) {
+				if (entity is File) {
+					final stat = await entity.stat();
+					totalBytes += stat.size;
+				}
+			}
+			return (totalBytes / (1024 * 1024)).floor();
 		} catch (_) {
 			return 0;
 		}
+	}
+
+	/// Deletes files in /media/ that are NOT in [keepFilenames] and older than [minAgeHours].
+	/// Returns the number of MB freed.
+	Future<int> pruneUnusedMedia(Set<String> keepFilenames, {int minAgeHours = 24}) async {
+		int freedBytes = 0;
+		try {
+			final appDir = await getAppStorageDir();
+			final mediaDir = Directory('${appDir.path}/media');
+			if (!await mediaDir.exists()) return 0;
+
+			final cutoff = DateTime.now().subtract(Duration(hours: minAgeHours));
+
+			await for (final entity in mediaDir.list(recursive: false)) {
+				if (entity is! File) continue;
+				final filename = entity.uri.pathSegments.last;
+				if (keepFilenames.contains(filename)) continue;
+
+				final stat = await entity.stat();
+				if (stat.modified.isAfter(cutoff)) continue;
+
+				freedBytes += stat.size;
+				await entity.delete();
+				AppLogger.download('Pruned stale file: $filename');
+			}
+		} catch (e) {
+			AppLogger.download('pruneUnusedMedia error: $e');
+		}
+		return (freedBytes / (1024 * 1024)).floor();
 	}
 
 	/// True when RequiredFiles lists layout XLFs or image/video media (like official Xibo).
