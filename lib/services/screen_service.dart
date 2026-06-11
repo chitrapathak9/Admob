@@ -173,4 +173,48 @@ class ScreenService {
 			return false;
 		}
 	}
+
+	Future<bool> sendStorageInfo({
+		required String hardwareKey,
+		required int usedMb,
+		required int totalMb,
+		required int freeMb,
+	}) async {
+		AppLogger.screenApi('→ POST /api/v1/screens/storage/info hardwareKey=$hardwareKey usedMb=$usedMb');
+		try {
+			final response = await _dio.post<Map<String, dynamic>>(
+				'/api/v1/screens/storage/info',
+				data: {
+					'hardwareKey': hardwareKey,
+					'usedMb': usedMb,
+					'totalMb': totalMb,
+					'freeMb': freeMb,
+				},
+			);
+			return response.data?['success'] == true;
+		} catch (e, st) {
+			AppLogger.screenApiError('← FAILED sendStorageInfo network error', e, st);
+			return false;
+		}
+	}
+
+	Future<bool> sendStorageClear({
+		required String hardwareKey,
+		required int freedMb,
+	}) async {
+		AppLogger.screenApi('→ POST /api/v1/screens/storage/clear hardwareKey=$hardwareKey freedMb=$freedMb');
+		try {
+			final response = await _dio.post<Map<String, dynamic>>(
+				'/api/v1/screens/storage/clear',
+				data: {
+					'hardwareKey': hardwareKey,
+					'freedMb': freedMb,
+				},
+			);
+			return response.data?['success'] == true;
+		} catch (e, st) {
+			AppLogger.screenApiError('← FAILED sendStorageClear network error', e, st);
+			return false;
+		}
+	}
 }

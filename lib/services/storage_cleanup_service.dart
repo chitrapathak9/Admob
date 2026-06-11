@@ -101,4 +101,28 @@ class StorageCleanupService {
 			_cleaning = false;
 		}
 	}
+
+	/// Forces an immediate cleanup of unused files, ignoring age requirements.
+	/// Returns the number of MB freed.
+	Future<int> forceClearUnused() async {
+		if (_keepFilenames.isEmpty) {
+			AppLogger.download('[StorageCleanup:forceClearUnused] skipped — keep set is empty');
+			return 0;
+		}
+		if (_cleaning) return 0;
+		_cleaning = true;
+		try {
+			final freedMb = await DownloadService.instance.pruneUnusedMedia(
+				_keepFilenames,
+				minAgeHours: 0,
+			);
+			AppLogger.download('[StorageCleanup:forceClearUnused] freed=${freedMb}MB');
+			return freedMb;
+		} catch (e, st) {
+			AppLogger.apiError('StorageCleanup', 'forceClearUnused', e, st);
+			return 0;
+		} finally {
+			_cleaning = false;
+		}
+	}
 }

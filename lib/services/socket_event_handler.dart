@@ -5,6 +5,7 @@ import 'download_service.dart';
 import 'screenshot_service.dart';
 import 'screen_service.dart';
 import 'socket_service.dart';
+import 'storage_cleanup_service.dart';
 import 'storage_service.dart';
 import 'xmds_service.dart';
 
@@ -47,6 +48,8 @@ class SocketEventHandler {
 		_onScreenshotRequested();
 		_onWrappedScreenEvents();
 		_onScreenshotCatchAll();
+		_onStorageInfoRequested();
+		_onStorageClearRequested();
 		AppLogger.socket('All socket event listeners registered (socketGen=$generation)');
 	}
 
@@ -59,6 +62,8 @@ class SocketEventHandler {
 		_socketService.off('content:updated');
 		_socketService.off('schedule:activated');
 		_socketService.off('schedule:paused');
+		_socketService.off('screen:storage:info:request');
+		_socketService.off('screen:storage:clear:request');
 		for (final event in _screenshotSocketEvents) {
 			_socketService.off(event);
 		}
@@ -148,6 +153,40 @@ class SocketEventHandler {
 			await ScreenshotService.instance.captureAndUpload(requestId: requestId);
 			SocketEventBus.instance.emit(SocketEvent.screenshotRequested, data);
 			AppLogger.screenshotEvent('Step 3 DONE — event="$event" handled');
+		});
+	}
+
+	void _onStorageInfoRequested() {
+		_socketService.on('screen:storage:info:request', (data) async {
+			AppLogger.socketEventReceived('screen:storage:info:request', data);
+			await _safe(() async {
+				final hardwareKey = await StorageService.instance.loadHardwareKey();
+				if (hardwareKey == null) return;
+				final usedMb = await _downloadService.getMediaDirUsedMB();
+				// Currently we don't have totalMb or freeMb, so we send 0 for now
+				// or calculate it using device_info if needed. We'll send what we have.
+				await _screenService.sendStorageInfo(
+					hardwareKey: hardwareKey,
+					usedMb: usedMb,
+					totalMb: 0,
+					freeMb: 0,
+				);
+			});
+		});
+	}
+
+	void _onStorageClearRequested() {
+		_socketService.on('screen:storage:clear:request', (data) async {
+			AppLogger.socketEventReceived('screen:storage:clear:request', data);
+			await _safe(() async {
+				final hardwareKey = await StorageService.instance.loadHardwareKey();
+				if (hardwareKey == null) return;
+				final freedMb = await StorageCleanupService.instance.forceClearUnused();
+				await _screenService.sendStorageClear(
+					hardwareKey: hardwareKey,
+					freedMb: freedMb,
+				);
+			});
 		});
 	}
 
