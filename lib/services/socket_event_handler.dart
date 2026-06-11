@@ -1,3 +1,5 @@
+import 'package:disk_space/disk_space.dart';
+
 import '../config/app_config.dart';
 import '../models/screen_status_data.dart';
 import '../utils/app_logger.dart';
@@ -163,13 +165,13 @@ class SocketEventHandler {
 				final hardwareKey = await StorageService.instance.loadHardwareKey();
 				if (hardwareKey == null) return;
 				final usedMb = await _downloadService.getMediaDirUsedMB();
-				// Currently we don't have totalMb or freeMb, so we send 0 for now
-				// or calculate it using device_info if needed. We'll send what we have.
+				final totalMbRaw = await DiskSpace.getTotalDiskSpace;
+				final freeMbRaw = await DiskSpace.getFreeDiskSpace;
 				await _screenService.sendStorageInfo(
 					hardwareKey: hardwareKey,
 					usedMb: usedMb,
-					totalMb: 0,
-					freeMb: 0,
+					totalMb: (totalMbRaw ?? 0).round(),
+					freeMb: (freeMbRaw ?? 0).round(),
 				);
 			});
 		});
