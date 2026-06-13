@@ -24,7 +24,7 @@ dependencies:
   wakelock_plus: ^1.2.10
   uuid: ^4.5.1
   socket_io_client: ^2.0.3+1
-  disk_space: ^4.0.2
+  disk_space_2: ^1.0.12
 
 dev_dependencies:
   flutter_test:

@@ -1,4 +1,4 @@
-import 'package:disk_space/disk_space.dart';
+import 'package:disk_space_2/disk_space_2.dart';
 
 import '../config/app_config.dart';
 import '../models/screen_status_data.dart';
