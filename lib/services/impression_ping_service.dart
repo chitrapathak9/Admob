@@ -13,8 +13,10 @@ import 'storage_service.dart';
 ///
 /// Pings are attempted immediately; failures are persisted in a local SQLite
 /// queue and retried on the next successful ping (drain-on-success strategy).
-/// This guarantees no impressions are silently dropped even without
-/// connectivity.
+/// This guarantees no impressions are silently dropped even without connectivity.
+///
+/// Payload: { hardwareKey, campaignId, layoutId, mediaId, timestamp }
+/// Endpoint: POST /api/v1/player/impression (public, no JWT)
 class ImpressionPingService {
 	ImpressionPingService._();
 	static final ImpressionPingService instance = ImpressionPingService._();
@@ -43,22 +45,36 @@ class ImpressionPingService {
 			final dbPath = '${await getDatabasesPath()}/impression_queue.db';
 			_db = await openDatabase(
 				dbPath,
-				version: 1,
+				// Version 2: removed schedule_id, campaign_id is now the required identifier
+				version: 2,
 				onCreate: (db, _) async {
 					await db.execute('''
 						CREATE TABLE IF NOT EXISTS ping_queue (
-							id          INTEGER PRIMARY KEY AUTOINCREMENT,
+							id           INTEGER PRIMARY KEY AUTOINCREMENT,
 							hardware_key TEXT    NOT NULL,
-							schedule_id  INTEGER NOT NULL,
+							campaign_id  TEXT    NOT NULL DEFAULT '',
 							media_id     TEXT    NOT NULL,
 							layout_id    TEXT    NOT NULL,
+							ts           TEXT    NOT NULL
+						)
+					''');
+				},
+				onUpgrade: (db, oldVersion, newVersion) async {
+					// Drop and recreate — offline queue is non-critical (impressions already shown)
+					await db.execute('DROP TABLE IF EXISTS ping_queue');
+					await db.execute('''
+						CREATE TABLE ping_queue (
+							id           INTEGER PRIMARY KEY AUTOINCREMENT,
+							hardware_key TEXT    NOT NULL,
 							campaign_id  TEXT    NOT NULL DEFAULT '',
+							media_id     TEXT    NOT NULL,
+							layout_id    TEXT    NOT NULL,
 							ts           TEXT    NOT NULL
 						)
 					''');
 				},
 			);
-			AppLogger.api('ImpPing', 'initialized — draining any queued pings');
+			AppLogger.api('ImpPing', 'initialized (v2) — draining any queued pings');
 			unawaited(_drainQueue());
 		} catch (e, st) {
 			AppLogger.apiError('ImpPing', 'init failed', e, st);
@@ -67,48 +83,48 @@ class ImpressionPingService {
 
 	/// Fire-and-forget: send ping now or enqueue for later retry.
 	Future<void> ping(PlayItem item) async {
+		// Only ping for revenue campaign items
+		if (item.campaignId.isEmpty) return;
+
 		final hardwareKey = await StorageService.instance.getOrCreateHardwareKey();
 		final ts = _nowIso();
 
 		final payload = {
 			'hardwareKey': hardwareKey,
-			'scheduleId': item.scheduleId,
-			'mediaId': item.mediaId,
-			'layoutId': item.layoutId,
-			'campaignId': item.campaignId,
-			'timestamp': ts,
+			'campaignId':  item.campaignId,
+			'mediaId':     item.mediaId,
+			'layoutId':    item.layoutId,
+			'timestamp':   ts,
 		};
 
 		try {
 			await _dio.post<void>(AppConfig.impressionPingPath, data: payload);
 			AppLogger.api(
 				'ImpPing',
-				'OK scheduleId=${item.scheduleId} mediaId=${item.mediaId}',
+				'OK campaignId=${item.campaignId} mediaId=${item.mediaId}',
 			);
 			// On success drain any accumulated offline queue.
 			unawaited(_drainQueue());
 		} catch (e) {
 			AppLogger.api(
 				'ImpPing',
-				'failed — queuing scheduleId=${item.scheduleId}',
+				'failed — queuing campaignId=${item.campaignId}',
 			);
 			await _enqueue(
 				hardwareKey: hardwareKey,
-				scheduleId: item.scheduleId,
-				mediaId: item.mediaId,
-				layoutId: item.layoutId,
-				campaignId: item.campaignId,
-				ts: ts,
+				campaignId:  item.campaignId,
+				mediaId:     item.mediaId,
+				layoutId:    item.layoutId,
+				ts:          ts,
 			);
 		}
 	}
 
 	Future<void> _enqueue({
 		required String hardwareKey,
-		required int scheduleId,
+		required String campaignId,
 		required String mediaId,
 		required String layoutId,
-		required String campaignId,
 		required String ts,
 	}) async {
 		final db = _db;
@@ -125,11 +141,10 @@ class ImpressionPingService {
 			}
 			await db.insert('ping_queue', {
 				'hardware_key': hardwareKey,
-				'schedule_id': scheduleId,
-				'media_id': mediaId,
-				'layout_id': layoutId,
-				'campaign_id': campaignId,
-				'ts': ts,
+				'campaign_id':  campaignId,
+				'media_id':     mediaId,
+				'layout_id':    layoutId,
+				'ts':           ts,
 			});
 		} catch (e, st) {
 			AppLogger.apiError('ImpPing', '_enqueue failed', e, st);
@@ -155,11 +170,10 @@ class ImpressionPingService {
 					try {
 						await _dio.post<void>(AppConfig.impressionPingPath, data: {
 							'hardwareKey': row['hardware_key'],
-							'scheduleId': row['schedule_id'],
-							'mediaId': row['media_id'],
-							'layoutId': row['layout_id'],
-							'campaignId': row['campaign_id'],
-							'timestamp': row['ts'],
+							'campaignId':  row['campaign_id'],
+							'mediaId':     row['media_id'],
+							'layoutId':    row['layout_id'],
+							'timestamp':   row['ts'],
 						});
 						sent.add(row['id'] as int);
 					} catch (_) {
