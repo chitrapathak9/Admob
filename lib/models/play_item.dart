@@ -7,6 +7,11 @@ class PlayItem {
 	final int scheduleId;
 	final String filename;
 	final String name;
+	// Revenue fields — default 0/empty means unlimited / no campaign association.
+	final String campaignId;
+	final int maxPerDay;
+	final int maxPerMonth;
+	final int dailyCapPerScreen;
 
 	const PlayItem({
 		required this.localPath,
@@ -17,6 +22,10 @@ class PlayItem {
 		this.scheduleId = 0,
 		this.filename = '',
 		this.name = '',
+		this.campaignId = '',
+		this.maxPerDay = 0,
+		this.maxPerMonth = 0,
+		this.dailyCapPerScreen = 0,
 	});
 
 	/// Media label for heartbeat — prefers display name, falls back to filename.

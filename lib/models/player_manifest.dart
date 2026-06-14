@@ -9,6 +9,11 @@ class ManifestMediaItem {
 	final String md5;
 	final String filename;
 	final String downloadUrl;
+	// Revenue fields — sent by backend when a revenue campaign is associated.
+	final String campaignId;
+	final int maxPerDay;
+	final int maxPerMonth;
+	final int dailyCapPerScreen;
 
 	const ManifestMediaItem({
 		required this.order,
@@ -21,6 +26,10 @@ class ManifestMediaItem {
 		required this.md5,
 		required this.filename,
 		required this.downloadUrl,
+		this.campaignId = '',
+		this.maxPerDay = 0,
+		this.maxPerMonth = 0,
+		this.dailyCapPerScreen = 0,
 	});
 
 	factory ManifestMediaItem.fromJson(Map<String, dynamic> json) {
@@ -35,6 +44,10 @@ class ManifestMediaItem {
 			md5: json['md5'] as String? ?? '',
 			filename: json['filename'] as String? ?? '',
 			downloadUrl: json['downloadUrl'] as String? ?? '',
+			campaignId: json['campaignId'] as String? ?? '',
+			maxPerDay: (json['maxPerDay'] as num?)?.toInt() ?? 0,
+			maxPerMonth: (json['maxPerMonth'] as num?)?.toInt() ?? 0,
+			dailyCapPerScreen: (json['dailyCapPerScreen'] as num?)?.toInt() ?? 0,
 		);
 	}
 }

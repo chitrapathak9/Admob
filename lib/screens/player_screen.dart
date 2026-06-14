@@ -11,7 +11,10 @@ import '../models/play_item.dart';
 import '../models/player_manifest.dart';
 import '../services/download_service.dart';
 import '../services/heartbeat_service.dart';
+import '../services/impression_frequency_service.dart';
+import '../services/impression_ping_service.dart';
 import '../services/player_service.dart';
+import '../services/revenue_campaign_service.dart';
 import '../services/screenshot_service.dart';
 import '../services/socket_service.dart';
 import '../services/storage_cleanup_service.dart';
@@ -84,6 +87,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Future<void> _bootstrap() async {
     StorageCleanupService.instance.start();
+    unawaited(ImpressionFrequencyService.instance.init());
+    unawaited(ImpressionPingService.instance.init());
     await _initPlayer();
     if (!mounted) return;
 
@@ -216,9 +221,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
           scheduleId: eventId,
           filename: media.filename,
           name: media.name,
+          campaignId: media.campaignId,
+          maxPerDay: media.maxPerDay,
+          maxPerMonth: media.maxPerMonth,
+          dailyCapPerScreen: media.dailyCapPerScreen,
         ),
       );
     }
+    // Register updated frequency limits so shouldShow() stays current.
+    ImpressionFrequencyService.instance.updateLimits(items);
     return items;
   }
 
@@ -394,11 +405,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _onItemComplete(PlayItem item) {
+    // Record impression and fire async ping — both are non-blocking.
+    unawaited(ImpressionFrequencyService.instance.recordImpression(item));
+    unawaited(ImpressionPingService.instance.ping(item));
+
     setState(() {
-      _currentIndex =
-          (_currentIndex + 1) % (_playlist.isEmpty ? 1 : _playlist.length);
+      _currentIndex = _nextAllowedIndex(_currentIndex + 1);
       _slideKey++;
     });
+  }
+
+  /// Returns the next playlist index that passes both frequency and prepaid
+  /// guards. Falls back to the raw next index if every item is blocked
+  /// (prevents an infinite loop — content still cycles).
+  int _nextAllowedIndex(int from) {
+    final len = _playlist.length;
+    if (len == 0) return 0;
+    for (var i = 0; i < len; i++) {
+      final idx = (from + i) % len;
+      final candidate = _playlist[idx];
+      if (!ImpressionFrequencyService.instance.shouldShow(candidate)) continue;
+      if (RevenueCampaignService.instance.isCampaignPaused(candidate.campaignId)) {
+        continue;
+      }
+      return idx;
+    }
+    return from % len;
   }
 
   Future<void> _goToConnectScreen() async {
