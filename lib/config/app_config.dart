@@ -18,6 +18,7 @@ class AppConfig {
   static const String playerOfflinePath = '/api/v1/player/offline';
   static const String healthPath = '/api/v1/player/health';
   static const String screensScreenshotPath = '/api/v1/screens/screenshot';
+  static const String impressionPingPath = '/api/v1/revenue/impressions/ping';
 
   /// Socket.io event names that trigger a screenshot capture.
   static const List<String> screenshotSocketEvents = [
