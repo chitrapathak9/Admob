@@ -4,6 +4,7 @@ import '../config/app_config.dart';
 import '../models/screen_status_data.dart';
 import '../utils/app_logger.dart';
 import 'download_service.dart';
+import 'revenue_campaign_service.dart';
 import 'screenshot_service.dart';
 import 'screen_service.dart';
 import 'socket_service.dart';
@@ -52,6 +53,8 @@ class SocketEventHandler {
 		_onScreenshotCatchAll();
 		_onStorageInfoRequested();
 		_onStorageClearRequested();
+		_onCampaignPaused();
+		_onCampaignReactivated();
 		AppLogger.socket('All socket event listeners registered (socketGen=$generation)');
 	}
 
@@ -64,6 +67,8 @@ class SocketEventHandler {
 		_socketService.off('content:updated');
 		_socketService.off('schedule:activated');
 		_socketService.off('schedule:paused');
+		_socketService.off('campaign:paused');
+		_socketService.off('campaign:reactivated');
 		_socketService.off('screen:storage:info:request');
 		_socketService.off('screen:storage:clear:request');
 		for (final event in _screenshotSocketEvents) {
@@ -280,10 +285,46 @@ class SocketEventHandler {
 
 	Future<void> catchUpAfterReconnect() async {
 		await _safe(() async {
+			// Clear stale pause state; the manifest resync will re-apply any still-active pauses.
+			RevenueCampaignService.instance.clear();
 			await refreshScreenStatus();
 			await _syncRequiredFilesAndDownload();
 			await _xmdsService.getSchedule();
 		});
+	}
+
+	void _onCampaignPaused() {
+		_socketService.on('campaign:paused', (data) async {
+			AppLogger.socketEventReceived('campaign:paused', data);
+			await _safe(() async {
+				final campaignId = _readStringField(data, 'campaignId');
+				if (campaignId != null) {
+					RevenueCampaignService.instance.disableCampaign(campaignId);
+				}
+				SocketEventBus.instance.emit(SocketEvent.campaignPaused, data);
+			});
+		});
+	}
+
+	void _onCampaignReactivated() {
+		_socketService.on('campaign:reactivated', (data) async {
+			AppLogger.socketEventReceived('campaign:reactivated', data);
+			await _safe(() async {
+				final campaignId = _readStringField(data, 'campaignId');
+				if (campaignId != null) {
+					RevenueCampaignService.instance.reEnableCampaign(campaignId);
+				}
+				SocketEventBus.instance.emit(SocketEvent.campaignReactivated, data);
+			});
+		});
+	}
+
+	String? _readStringField(dynamic data, String key) {
+		if (data is! Map) return null;
+		final value = data[key];
+		if (value == null) return null;
+		final str = value.toString().trim();
+		return str.isEmpty ? null : str;
 	}
 
 	Future<void> _safe(Future<void> Function() action) async {

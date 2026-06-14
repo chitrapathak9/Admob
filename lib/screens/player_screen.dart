@@ -68,6 +68,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     bus.on(SocketEvent.schedulePaused, _handleSocketScheduleChange);
     bus.on(SocketEvent.reconnected, _handleSocketContentChange);
     bus.on(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
+    bus.on(SocketEvent.campaignPaused, _handleCampaignPaused);
+    bus.on(SocketEvent.campaignReactivated, _handleCampaignReactivated);
   }
 
   void _handleDeviceNotRegistered(dynamic _) {
@@ -83,6 +85,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _handleSocketScheduleChange(dynamic _) {
     if (!mounted) return;
     _refreshManifest();
+  }
+
+  void _handleCampaignPaused(dynamic _) {
+    // RevenueCampaignService already updated; rebuild UI so _nextAllowedIndex
+    // skips the newly paused campaign in the next cycle.
+    if (!mounted) return;
+    setState(() {});
+    _maybeEnterFallback();
+  }
+
+  void _handleCampaignReactivated(dynamic _) {
+    if (!mounted) return;
+    // If we were showing fallback, exit it now that a campaign is live again.
+    if (_noContent) _refreshManifest();
+    setState(() {});
+  }
+
+  /// If every campaign in the current playlist is paused, show the no-content
+  /// fallback screen until at least one campaign is reactivated.
+  void _maybeEnterFallback() {
+    if (_playlist.isEmpty) return;
+    final ids = _playlist.map((p) => p.campaignId).toList();
+    if (RevenueCampaignService.instance.areAllCampaignsPaused(ids)) {
+      AppLogger.api('RevCampaign', 'all campaigns paused — entering fallback');
+      _enterNoContentState();
+    }
   }
 
   Future<void> _bootstrap() async {
@@ -455,6 +483,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     bus.off(SocketEvent.schedulePaused, _handleSocketScheduleChange);
     bus.off(SocketEvent.reconnected, _handleSocketContentChange);
     bus.off(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
+    bus.off(SocketEvent.campaignPaused, _handleCampaignPaused);
+    bus.off(SocketEvent.campaignReactivated, _handleCampaignReactivated);
     _stopHeartbeat();
     _retryTimer?.cancel();
     _noContentTimer?.cancel();

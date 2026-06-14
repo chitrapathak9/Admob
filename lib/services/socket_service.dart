@@ -330,6 +330,8 @@ enum SocketEvent {
   reconnected,
   screenshotRequested,
   deviceNotRegistered,
+  campaignPaused,
+  campaignReactivated,
 }
 
 class SocketEventBus {
