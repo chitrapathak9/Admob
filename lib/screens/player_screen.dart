@@ -18,6 +18,8 @@ import '../services/storage_cleanup_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmr_service.dart';
 import '../utils/app_logger.dart';
+import '../services/xlf_parser.dart';
+import '../widgets/adaptive_padding.dart';
 import '../widgets/image_slide.dart';
 import '../widgets/theadbook_logo.dart';
 import '../widgets/video_slide.dart';
@@ -52,6 +54,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    // Allow all orientations until we know the layout's intended orientation.
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     WakelockPlus.enable();
     _registerSocketListeners();
     _bootstrap();
@@ -149,6 +153,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _errorMessage = null;
         _noContent = false;
       });
+      unawaited(_applyOrientationPreference(playlist));
       debugPrint('[Player] Init complete — ${_playlist.length} items ready');
       return true;
     } on PlayerApiException catch (e) {
@@ -216,6 +221,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           scheduleId: eventId,
           filename: media.filename,
           name: media.name,
+          layoutWidth: media.layoutWidth,
+          layoutHeight: media.layoutHeight,
         ),
       );
     }
@@ -346,6 +353,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _isLoading = false;
           _errorMessage = null;
         });
+        unawaited(_applyOrientationPreference(newPlaylist));
       }
     } on PlayerApiException catch (e) {
       debugPrint('[Player] Manifest refresh: ${e.code}');
@@ -361,6 +369,51 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } finally {
       _collecting = false;
     }
+  }
+
+  /// Detects the intended orientation from [playlist] and locks the device to it.
+  ///
+  /// Priority:
+  ///   1. layoutWidth/layoutHeight carried on the PlayItem (from manifest JSON).
+  ///   2. Dimensions parsed from the cached XLF file for each layoutId.
+  ///   3. Free rotation (no lock) when orientation cannot be determined.
+  Future<void> _applyOrientationPreference(List<PlayItem> playlist) async {
+    if (playlist.isEmpty) {
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      return;
+    }
+
+    // 1 — manifest supplied dimensions
+    for (final item in playlist) {
+      if (item.hasKnownOrientation) {
+        await _lockToOrientation(item.layoutWidth, item.layoutHeight);
+        return;
+      }
+    }
+
+    // 2 — parse cached XLF on disk
+    final seenLayoutIds = <String>{};
+    for (final item in playlist) {
+      final id = item.layoutId;
+      if (id.isEmpty || seenLayoutIds.contains(id)) continue;
+      seenLayoutIds.add(id);
+      final dims = await XlfParser.instance.parseLayoutDimensions(id);
+      if (dims != null) {
+        await _lockToOrientation(dims['width']!, dims['height']!);
+        return;
+      }
+    }
+
+    // 3 — unknown: allow free rotation so device adapts naturally
+    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+  }
+
+  Future<void> _lockToOrientation(int width, int height) async {
+    final orientations = width >= height
+        ? [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]
+        : [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown];
+    await SystemChrome.setPreferredOrientations(orientations);
+    debugPrint('[Player] Orientation locked: ${width >= height ? "landscape" : "portrait"} ($width×$height)');
   }
 
   Widget _buildSocketConnectionIndicator() {
@@ -430,6 +483,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     StorageCleanupService.instance.stop();
     WakelockPlus.disable();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    // Restore free rotation so other screens (setup, waiting) are not locked.
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     super.dispose();
   }
 
@@ -464,24 +519,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget _buildLoadingUi() {
     return Scaffold(
       backgroundColor: AppConfig.background,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const TheadbookLogo(height: 100),
-              const SizedBox(height: 40),
-              const CircularProgressIndicator(color: _loadingOrange),
-              const SizedBox(height: 24),
-              Text(
-                _loadingMessage,
-                style: const TextStyle(color: Colors.white70, fontSize: 16),
-                textAlign: TextAlign.center,
+      body: OrientationBuilder(
+        builder: (context, orientation) {
+          final isLandscape = orientation == Orientation.landscape;
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  TheadbookLogo(height: adaptiveLogoHeightOriented(context, portrait: 100, landscape: 56)),
+                  SizedBox(height: adaptiveGap(context, portrait: 40, landscape: 16)),
+                  const CircularProgressIndicator(color: _loadingOrange),
+                  SizedBox(height: isLandscape ? 12 : 24),
+                  Text(
+                    _loadingMessage,
+                    style: const TextStyle(color: Colors.white70, fontSize: 16),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -532,33 +592,36 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return Scaffold(
       backgroundColor: AppConfig.background,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Center(child: TheadbookLogo(height: 100)),
-              const SizedBox(height: 40),
-              const Text(
-                'No content scheduled',
-                style: TextStyle(color: Colors.white, fontSize: 22),
-                textAlign: TextAlign.center,
+        child: OrientationBuilder(
+          builder: (context, _) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(child: TheadbookLogo(height: adaptiveLogoHeightOriented(context, portrait: 100, landscape: 56))),
+                  SizedBox(height: adaptiveGap(context, portrait: 40, landscape: 16)),
+                  const Text(
+                    'No content scheduled',
+                    style: TextStyle(color: Colors.white, fontSize: 22),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Content will appear automatically when scheduled',
+                    style: TextStyle(color: Colors.white54, fontSize: 16),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Checking every ${AppConfig.manifestRetrySeconds} seconds…',
+                    style: const TextStyle(color: Colors.white38, fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              const Text(
-                'Content will appear automatically when scheduled',
-                style: TextStyle(color: Colors.white54, fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Checking every ${AppConfig.manifestRetrySeconds} seconds…',
-                style: const TextStyle(color: Colors.white38, fontSize: 14),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -568,33 +631,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return Scaffold(
       backgroundColor: AppConfig.background,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Center(child: TheadbookLogo(height: 80)),
-              const SizedBox(height: 32),
-              const CircularProgressIndicator(color: _loadingOrange),
-              const SizedBox(height: 24),
-              Text(
-                _mediaTotal == 0
-                    ? 'Waiting for content from server…'
-                    : '$_mediaReady of $_mediaTotal media files ready',
-                style: const TextStyle(color: Colors.white, fontSize: 18),
-                textAlign: TextAlign.center,
+        child: OrientationBuilder(
+          builder: (context, _) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(child: TheadbookLogo(height: adaptiveLogoHeightOriented(context, portrait: 80, landscape: 48))),
+                  SizedBox(height: adaptiveGap(context, portrait: 32, landscape: 12)),
+                  const CircularProgressIndicator(color: _loadingOrange),
+                  SizedBox(height: adaptiveGap(context, portrait: 24, landscape: 12)),
+                  Text(
+                    _mediaTotal == 0
+                        ? 'Waiting for content from server…'
+                        : '$_mediaReady of $_mediaTotal media files ready',
+                    style: const TextStyle(color: Colors.white, fontSize: 18),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: adaptiveGap(context, portrait: 24, landscape: 12)),
+                  ElevatedButton(
+                    onPressed: _onRetryTap,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _loadingOrange,
+                      foregroundColor: Colors.black,
+                    ),
+                    child: const Text('Retry now', style: TextStyle(fontSize: 18)),
+                  ),
+                ],
               ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _onRetryTap,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _loadingOrange,
-                  foregroundColor: Colors.black,
-                ),
-                child: const Text('Retry now', style: TextStyle(fontSize: 18)),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

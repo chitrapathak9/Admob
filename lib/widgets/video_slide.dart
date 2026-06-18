@@ -81,7 +81,10 @@ class _VideoSlideState extends State<VideoSlide> {
 			color: Colors.black,
 			child: SizedBox.expand(
 				child: FittedBox(
-					fit: BoxFit.cover,
+					// BoxFit.contain keeps the video's native aspect ratio.
+					// Black bars appear when the screen and video orientations differ
+					// rather than cropping the content.
+					fit: BoxFit.contain,
 					child: SizedBox(
 						width: c.value.size.width,
 						height: c.value.size.height,

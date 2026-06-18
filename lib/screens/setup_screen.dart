@@ -136,8 +136,10 @@ class _SetupScreenState extends State<SetupScreen> {
 	@override
 	Widget build(BuildContext context) {
 		final padding = adaptiveScreenPadding(context);
-		final logoHeight = adaptiveLogoHeight(context, large: 100, small: 72);
+		final logoHeight = adaptiveLogoHeightOriented(context, portrait: 100, landscape: 56);
 		final titleSize = adaptiveTitleSize(context);
+		final afterLogo = adaptiveGap(context, portrait: 32, landscape: 12);
+		final afterSubtitle = adaptiveGap(context, portrait: 40, landscape: 16);
 
 		return Scaffold(
 			backgroundColor: AppConfig.background,
@@ -153,7 +155,7 @@ class _SetupScreenState extends State<SetupScreen> {
 								mainAxisAlignment: MainAxisAlignment.center,
 								children: [
 									TheadbookLogo(height: logoHeight),
-									const SizedBox(height: 32),
+									SizedBox(height: afterLogo),
 									Text(
 										'Connect Your Screen',
 										style: TextStyle(color: Colors.white, fontSize: titleSize),
@@ -165,7 +167,7 @@ class _SetupScreenState extends State<SetupScreen> {
 										style: TextStyle(color: Colors.white54, fontSize: 14),
 										textAlign: TextAlign.center,
 									),
-									const SizedBox(height: 40),
+									SizedBox(height: afterSubtitle),
 									_buildField(
 										label: 'Server Address',
 										controller: _apiUrlController,
@@ -184,7 +186,7 @@ class _SetupScreenState extends State<SetupScreen> {
 											textAlign: TextAlign.center,
 										),
 									],
-									const SizedBox(height: 32),
+									SizedBox(height: adaptiveGap(context, portrait: 32, landscape: 12)),
 									SizedBox(
 										width: double.infinity,
 										height: 52,

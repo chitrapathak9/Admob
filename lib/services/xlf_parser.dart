@@ -328,6 +328,27 @@ class XlfParser {
 
 		return items;
 	}
+
+	/// Reads `<layout width="W" height="H">` from the cached XLF for [layoutId].
+	/// Returns `{'width': W, 'height': H}` or `null` when the file is absent or
+	/// the root element has no parseable dimensions.
+	Future<Map<String, int>?> parseLayoutDimensions(String layoutId) async {
+		try {
+			final localPath = await DownloadService.instance.getLocalPath('$layoutId.xlf');
+			final file = File(localPath);
+			if (!await file.exists()) return null;
+			final content = await file.readAsString();
+			final doc = XmlDocument.parse(content);
+			final layout = doc.findAllElements('layout').firstOrNull;
+			if (layout == null) return null;
+			final w = int.tryParse(layout.getAttribute('width') ?? '');
+			final h = int.tryParse(layout.getAttribute('height') ?? '');
+			if (w == null || h == null || w <= 0 || h <= 0) return null;
+			return {'width': w, 'height': h};
+		} catch (_) {
+			return null;
+		}
+	}
 }
 
 extension _XmlFirstOrNull on Iterable<XmlElement> {

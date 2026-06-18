@@ -42,10 +42,13 @@ class _ImageSlideState extends State<ImageSlide> {
 			color: Colors.black,
 			child: Image.file(
 				File(widget.localPath),
-				fit: BoxFit.cover,
+				// BoxFit.contain preserves the image's native aspect ratio.
+				// Black bars appear on the letterbox/pillarbox sides instead of
+				// cropping the content when the screen orientation doesn't match.
+				fit: BoxFit.contain,
 				width: double.infinity,
 				height: double.infinity,
-				errorBuilder: (_, __, ___) {
+				errorBuilder: (context, error, stackTrace) {
 					WidgetsBinding.instance.addPostFrameCallback((_) => widget.onComplete());
 					return const SizedBox.shrink();
 				},

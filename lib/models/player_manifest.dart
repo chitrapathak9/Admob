@@ -9,6 +9,9 @@ class ManifestMediaItem {
 	final String md5;
 	final String filename;
 	final String downloadUrl;
+	/// Layout canvas dimensions sent by the backend (0 when absent).
+	final int layoutWidth;
+	final int layoutHeight;
 
 	const ManifestMediaItem({
 		required this.order,
@@ -21,6 +24,8 @@ class ManifestMediaItem {
 		required this.md5,
 		required this.filename,
 		required this.downloadUrl,
+		this.layoutWidth = 0,
+		this.layoutHeight = 0,
 	});
 
 	factory ManifestMediaItem.fromJson(Map<String, dynamic> json) {
@@ -35,6 +40,8 @@ class ManifestMediaItem {
 			md5: json['md5'] as String? ?? '',
 			filename: json['filename'] as String? ?? '',
 			downloadUrl: json['downloadUrl'] as String? ?? '',
+			layoutWidth: (json['layoutWidth'] as num?)?.toInt() ?? 0,
+			layoutHeight: (json['layoutHeight'] as num?)?.toInt() ?? 0,
 		);
 	}
 }

@@ -23,3 +23,19 @@ double adaptiveTitleSize(BuildContext context) {
 	if (width < 600) return 20;
 	return 22;
 }
+
+/// Returns a smaller gap in landscape where vertical space is scarce.
+double adaptiveGap(BuildContext context, {double portrait = 40, double landscape = 16}) {
+	final size = MediaQuery.sizeOf(context);
+	return size.width > size.height ? landscape : portrait;
+}
+
+/// Logo height that shrinks further in landscape to preserve vertical space.
+double adaptiveLogoHeightOriented(
+	BuildContext context, {
+	double portrait = 100,
+	double landscape = 60,
+}) {
+	final size = MediaQuery.sizeOf(context);
+	return size.width > size.height ? landscape : portrait;
+}

@@ -258,7 +258,11 @@ class _WaitingScreenState extends State<WaitingScreen> {
 	@override
 	Widget build(BuildContext context) {
 		final padding = adaptiveScreenPadding(context);
-		final logoHeight = adaptiveLogoHeight(context);
+		final logoHeight = adaptiveLogoHeightOriented(context, portrait: 120, landscape: 56);
+		final afterLogo = adaptiveGap(context, portrait: 40, landscape: 16);
+		final afterSpinner = adaptiveGap(context, portrait: 24, landscape: 12);
+		final beforeId = adaptiveGap(context, portrait: 32, landscape: 12);
+		final beforeButton = adaptiveGap(context, portrait: 48, landscape: 16);
 
 		return Scaffold(
 			backgroundColor: AppConfig.background,
@@ -273,9 +277,9 @@ class _WaitingScreenState extends State<WaitingScreen> {
 									mainAxisAlignment: MainAxisAlignment.center,
 									children: [
 										TheadbookLogo(height: logoHeight),
-										const SizedBox(height: 40),
+										SizedBox(height: afterLogo),
 										const CircularProgressIndicator(color: AppConfig.accentOrange),
-										const SizedBox(height: 24),
+										SizedBox(height: afterSpinner),
 										Text(
 											_title,
 											style: const TextStyle(
@@ -291,7 +295,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 											style: const TextStyle(color: Colors.white54, fontSize: 14),
 											textAlign: TextAlign.center,
 										),
-										const SizedBox(height: 32),
+										SizedBox(height: beforeId),
 										const Text(
 											'Screen ID',
 											style: TextStyle(color: Colors.white54, fontSize: 14),
@@ -311,7 +315,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 											const SizedBox(height: 16),
 											Text(_error!, style: const TextStyle(color: Colors.white38), textAlign: TextAlign.center),
 										],
-										const SizedBox(height: 48),
+										SizedBox(height: beforeButton),
 										TextButton(
 											onPressed: _reconfigure,
 											child: const Text('Edit Settings', style: TextStyle(color: Colors.white54)),
