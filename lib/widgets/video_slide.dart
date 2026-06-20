@@ -64,19 +64,19 @@ class _VideoSlideState extends State<VideoSlide> {
 			await ctrl.setLooping(true);
 			ctrl.addListener(_onControllerUpdate);
 
-			// ── CRITICAL ORDER ──────────────────────────────────────────────────
-			// 1. Put the VideoPlayer widget into the tree FIRST.
-			//    This lets the Flutter engine create the SurfaceTexture /
-			//    AndroidExternalTexture that ExoPlayer will render frames onto.
 			setState(() => _controller = ctrl);
 
-			// 2. Start playback AFTER the next frame is painted.
-			//    Calling play() before the texture is attached causes ExoPlayer to
-			//    decode internally but have nothing to render to — the video appears
-			//    frozen on the first frame (the classic "thumbnail" symptom).
-			WidgetsBinding.instance.addPostFrameCallback((_) {
-				if (mounted && !_completed) {
-					_controller?.play();
+			// Wait for the VideoPlayer widget to be inserted into the Flutter widget
+			// tree so that the Android SurfaceTexture is created before we call play().
+			// Using the captured local `ctrl` (non-nullable) avoids the race where
+			// _controller might be nulled out if the widget is disposed between frames.
+			WidgetsBinding.instance.addPostFrameCallback((_) async {
+				if (!mounted || _completed) return;
+				try {
+					await ctrl.play();
+				} catch (_) {
+					// If play() fails after the widget is live, the duration timer
+					// will advance the playlist naturally — no crash.
 				}
 			});
 		} catch (e, st) {
