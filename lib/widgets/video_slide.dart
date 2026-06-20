@@ -23,15 +23,13 @@ class VideoSlide extends StatefulWidget {
 class _VideoSlideState extends State<VideoSlide> {
 	VideoPlayerController? _controller;
 	bool _completed = false;
+	bool _playStarted = false;
 	Timer? _durationTimer;
+	Timer? _playbackWatchdog;
 
 	@override
 	void initState() {
 		super.initState();
-		// Playlist advancement is driven by this timer, not the video's natural length.
-		// A 10 s clip in a 30 s slot loops 3× and then advances.
-		final playSeconds = widget.duration > 0 ? widget.duration : 30;
-		_durationTimer = Timer(Duration(seconds: playSeconds), _finish);
 		_init();
 	}
 
@@ -40,10 +38,19 @@ class _VideoSlideState extends State<VideoSlide> {
 
 		if (!file.existsSync()) {
 			debugPrint('[VideoSlide] File not found: ${widget.localPath}');
-			// Do NOT call _finish here — let the duration timer fire naturally
-			// so the slot length is respected even when the file is missing.
+			_scheduleDurationTimer();
 			return;
 		}
+
+		// Reject zero-byte files that may result from a failed download.
+		final fileSize = file.lengthSync();
+		if (fileSize == 0) {
+			debugPrint('[VideoSlide] File is empty (0 bytes): ${widget.localPath}');
+			_scheduleDurationTimer();
+			return;
+		}
+
+		debugPrint('[VideoSlide] Initializing controller for: ${widget.localPath} ($fileSize bytes)');
 
 		VideoPlayerController? ctrl;
 		try {
@@ -58,40 +65,87 @@ class _VideoSlideState extends State<VideoSlide> {
 			if (!ctrl.value.isInitialized) {
 				debugPrint('[VideoSlide] initialize() returned but isInitialized=false: ${widget.localPath}');
 				await ctrl.dispose();
+				_scheduleDurationTimer();
 				return;
 			}
+
+			debugPrint(
+				'[VideoSlide] OK — duration=${ctrl.value.duration} '
+				'size=${ctrl.value.size} aspectRatio=${ctrl.value.aspectRatio}',
+			);
 
 			await ctrl.setLooping(true);
 			ctrl.addListener(_onControllerUpdate);
 
+			// Put the VideoPlayer widget into the tree first so that the Android
+			// SurfaceTexture is created before play() is called.
 			setState(() => _controller = ctrl);
 
-			// Wait for the VideoPlayer widget to be inserted into the Flutter widget
-			// tree so that the Android SurfaceTexture is created before we call play().
-			// Using the captured local `ctrl` (non-nullable) avoids the race where
-			// _controller might be nulled out if the widget is disposed between frames.
+			// Schedule the slot duration timer NOW — after we know the file is valid
+			// and the controller is ready. Starting it here (rather than in initState)
+			// means the duration counts from first-frame display, not from widget creation.
+			_scheduleDurationTimer();
+
+			// Call play() after the next frame so the SurfaceTexture is attached.
+			// We use the captured non-nullable `ctrl` to avoid a null-deref if
+			// _controller is cleared between frames.
 			WidgetsBinding.instance.addPostFrameCallback((_) async {
-				if (!mounted || _completed) return;
-				try {
-					await ctrl.play();
-				} catch (_) {
-					// If play() fails after the widget is live, the duration timer
-					// will advance the playlist naturally — no crash.
+				if (!mounted || _completed) {
+					debugPrint('[VideoSlide] Skipping play — mounted=$mounted _completed=$_completed');
+					return;
 				}
+				await _startPlayback(ctrl!);
 			});
 		} catch (e, st) {
-			debugPrint('[VideoSlide] Init failed path=${widget.localPath}: $e');
-			debugPrint('[VideoSlide] Stack: $st');
+			debugPrint('[VideoSlide] Init failed: ${widget.localPath}\n$e\n$st');
 			await ctrl?.dispose();
-			// Duration timer drives playlist advancement; no need to call _finish here.
+			_scheduleDurationTimer();
 		}
+	}
+
+	/// Starts playback and installs a watchdog that retries once if ExoPlayer
+	/// doesn't start rendering within 2 seconds (handles surface-attach delays).
+	Future<void> _startPlayback(VideoPlayerController ctrl) async {
+		if (_playStarted || _completed || !mounted) return;
+		_playStarted = true;
+
+		try {
+			debugPrint('[VideoSlide] Calling play()');
+			await ctrl.play();
+			debugPrint('[VideoSlide] play() returned — isPlaying=${ctrl.value.isPlaying}');
+		} catch (e) {
+			debugPrint('[VideoSlide] play() threw: $e');
+		}
+
+		// Watchdog: if after 2 seconds the video is not actually playing,
+		// call play() again. This catches ExoPlayer surface-attach races
+		// that the postFrameCallback doesn't fully cover on all Android versions.
+		_playbackWatchdog = Timer(const Duration(seconds: 2), () async {
+			if (!mounted || _completed) return;
+			final c = _controller;
+			if (c != null && c.value.isInitialized && !c.value.isPlaying) {
+				debugPrint('[VideoSlide] Watchdog: video not playing — retrying play()');
+				try {
+					await c.play();
+				} catch (e) {
+					debugPrint('[VideoSlide] Watchdog play() threw: $e');
+				}
+			}
+		});
+	}
+
+	/// Schedules the slot-duration timer that advances the playlist.
+	void _scheduleDurationTimer() {
+		_durationTimer?.cancel();
+		final playSeconds = widget.duration > 0 ? widget.duration : 30;
+		_durationTimer = Timer(Duration(seconds: playSeconds), _finish);
 	}
 
 	void _onControllerUpdate() {
 		if (_completed || _controller == null) return;
-		if (_controller!.value.hasError) {
-			debugPrint('[VideoSlide] Playback error: ${_controller!.value.errorDescription}');
-			// Let the timer expire naturally instead of skipping immediately.
+		final c = _controller!;
+		if (c.value.hasError) {
+			debugPrint('[VideoSlide] Playback error: ${c.value.errorDescription}');
 		}
 	}
 
@@ -104,6 +158,7 @@ class _VideoSlideState extends State<VideoSlide> {
 	@override
 	void dispose() {
 		_durationTimer?.cancel();
+		_playbackWatchdog?.cancel();
 		_controller?.removeListener(_onControllerUpdate);
 		_controller?.dispose();
 		super.dispose();
@@ -113,14 +168,11 @@ class _VideoSlideState extends State<VideoSlide> {
 	Widget build(BuildContext context) {
 		final c = _controller;
 
-		// Show black while the controller is loading or if init failed.
+		// Black placeholder while the controller is loading or if init failed.
 		if (c == null || !c.value.isInitialized) {
 			return const ColoredBox(color: Colors.black);
 		}
 
-		// AspectRatio is the canonical video_player approach — it is always
-		// correct once isInitialized=true and avoids the 0×0 invisible-player
-		// issue that occurs when using c.value.size.width/height directly.
 		return ColoredBox(
 			color: Colors.black,
 			child: Center(
