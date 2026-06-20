@@ -81,9 +81,13 @@ class DownloadService {
 	Future<void> _downloadManifestFromUrl(ManifestMediaItem item, String savePath) async {
 		AppLogger.download('Manifest HTTP: ${item.filename}');
 
+		// Use the manifest type field as the primary signal for video detection.
+		// Filename extension is a fallback for cases where type is missing.
+		final isVideo = item.type == 'video' || _isVideoFilename(item.filename);
+
 		for (var attempt = 0; attempt < 2; attempt++) {
 			try {
-				if (_isVideoFilename(item.filename)) {
+				if (isVideo) {
 					// Stream video directly to disk — avoids OOM for large files.
 					await _streamDio.download(item.downloadUrl, savePath);
 					if (item.md5.isNotEmpty) {
