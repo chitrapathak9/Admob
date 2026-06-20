@@ -163,32 +163,32 @@ class _SetupScreenState extends State<SetupScreen> {
 									TheadbookLogo(height: logoHeight),
 									SizedBox(height: afterLogo),
 									Text(
-										'Connect Your Screen',
+										'Device Registration',
 										style: TextStyle(color: Colors.white, fontSize: titleSize),
 										textAlign: TextAlign.center,
 									),
 									const SizedBox(height: 12),
 									const Text(
-										'Enter the details below to connect this screen to your account.',
+										'Please provide your server credentials to link this device to your signage network.',
 										style: TextStyle(color: Colors.white54, fontSize: 14),
 										textAlign: TextAlign.center,
 									),
 									SizedBox(height: afterSubtitle),
 									_buildField(
-										label: 'Server Address',
+										label: 'CMS Server URL',
 										controller: _apiUrlController,
 										keyboardType: TextInputType.url,
 									),
 									const SizedBox(height: 16),
 									_buildField(
-										label: 'Screen Name',
+										label: 'Display Name',
 										controller: _screenNameController,
 									),
 									const SizedBox(height: 24),
 									const Align(
 										alignment: Alignment.centerLeft,
 										child: Text(
-											'Settings',
+											'Device Settings',
 											style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
 										),
 									),
@@ -200,7 +200,7 @@ class _SetupScreenState extends State<SetupScreen> {
 										),
 										child: SwitchListTile(
 											title: const Text('Always On Display', style: TextStyle(color: Colors.white)),
-											subtitle: const Text('Keep screen awake while player is active', style: TextStyle(color: Colors.white54, fontSize: 12)),
+											subtitle: const Text('Prevent the display from sleeping during playback', style: TextStyle(color: Colors.white54, fontSize: 12)),
 											value: _alwaysOnDisplay,
 											activeColor: AppConfig.accentOrange,
 											onChanged: (val) {
@@ -227,7 +227,7 @@ class _SetupScreenState extends State<SetupScreen> {
 															SizedBox(width: 8),
 															Expanded(
 																child: Text(
-																	'Battery Optimization Enabled',
+																	'Background Execution Restricted',
 																	style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
 																),
 															),
@@ -235,7 +235,7 @@ class _SetupScreenState extends State<SetupScreen> {
 													),
 													const SizedBox(height: 8),
 													const Text(
-														'Android may kill or pause the player in the background. Please disable battery optimization for this app.',
+														'To ensure uninterrupted playback, please exempt this application from Android battery optimizations.',
 														style: TextStyle(color: Colors.white70, fontSize: 13),
 													),
 													const SizedBox(height: 12),
@@ -280,7 +280,7 @@ class _SetupScreenState extends State<SetupScreen> {
 													height: 24,
 													child: CircularProgressIndicator(strokeWidth: 2),
 												)
-												: const Text('Continue', style: TextStyle(fontSize: 18)),
+												: const Text('Register Device', style: TextStyle(fontSize: 18)),
 										),
 									),
 								],

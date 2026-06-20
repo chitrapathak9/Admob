@@ -54,6 +54,8 @@ class PlayerManifest {
 	final int collectionInterval;
 	/// Max MB the /media/ dir may use before stale files are pruned. Backend-controlled via STORAGE_THRESHOLD_MB env.
 	final int storageThresholdMb;
+	/// Number of physical panels on this device. 1 = single screen, 2 = PHOENIX dual-stacked.
+	final int zoneCount;
 	final Map<String, dynamic>? schedule;
 	final List<ManifestMediaItem> media;
 
@@ -64,6 +66,7 @@ class PlayerManifest {
 		required this.manifestHash,
 		required this.collectionInterval,
 		this.storageThresholdMb = 1024,
+		this.zoneCount = 1,
 		this.schedule,
 		required this.media,
 	});
@@ -78,6 +81,7 @@ class PlayerManifest {
 			manifestHash: data['manifestHash'] as String? ?? '',
 			collectionInterval: (data['collectionInterval'] as num?)?.toInt() ?? 60,
 			storageThresholdMb: (data['storageThresholdMb'] as num?)?.toInt() ?? 1024,
+			zoneCount: (data['zoneCount'] as num?)?.toInt() ?? 1,
 			schedule: data['schedule'] as Map<String, dynamic>?,
 			media: mediaJson
 				.map((e) => ManifestMediaItem.fromJson(e as Map<String, dynamic>))

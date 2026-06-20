@@ -45,6 +45,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   String _manifestHash = '';
   int _mediaTotal = 0;
   int _mediaReady = 0;
+  int _zoneCount = 1;
 
   bool _isLoading = true;
   String _loadingMessage = 'Connecting to server...';
@@ -127,7 +128,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _isLoading = true;
       _errorMessage = null;
       _noContent = false;
-      _loadingMessage = 'Wait! While we are fetching content for this screen...';
+      _loadingMessage = 'Please wait while we fetch the latest content for this display...';
     });
 
     _retryTimer?.cancel();
@@ -139,6 +140,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
       _manifestHash = manifest.manifestHash;
       _mediaTotal = manifest.media.length;
+      _zoneCount = manifest.zoneCount;
       await StorageService.instance.saveManifestHash(manifest.manifestHash);
 
       if (manifest.media.isEmpty) {
@@ -149,7 +151,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
 
       if (!mounted) return false;
-      setState(() => _loadingMessage = 'Downloading media assets for playback...');
+      setState(() => _loadingMessage = 'Downloading media assets. Playback will begin shortly...');
 
       await DownloadService.instance.downloadManifestMedia(manifest.media);
       final playlist = await _buildPlaylistFromManifest(manifest);
@@ -360,6 +362,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _manifestHash = manifest.manifestHash;
       _mediaTotal = manifest.media.length;
       _mediaReady = newPlaylist.length;
+      _zoneCount = manifest.zoneCount;
       await StorageService.instance.saveManifestHash(manifest.manifestHash);
 
       if (!mounted || newPlaylist.isEmpty) return;
@@ -619,7 +622,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                       foregroundColor: Colors.black,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
-                    child: const Text('Retry Connection', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    child: const Text('Attempt Reconnection', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -650,19 +653,19 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   Center(child: TheadbookLogo(height: adaptiveLogoHeightOriented(context, portrait: 100, landscape: 56))),
                   SizedBox(height: adaptiveGap(context, portrait: 40, landscape: 16)),
                   const Text(
-                    'No content scheduled',
+                    'No Content Scheduled',
                     style: TextStyle(color: Colors.white, fontSize: 22),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'Content will appear automatically when scheduled',
+                    'The display will automatically update once new content is published.',
                     style: TextStyle(color: Colors.white54, fontSize: 16),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    'Checking every ${AppConfig.manifestRetrySeconds} seconds…',
+                    'Checking for updates every ${AppConfig.manifestRetrySeconds} seconds...',
                     style: const TextStyle(color: Colors.white38, fontSize: 14),
                     textAlign: TextAlign.center,
                   ),
@@ -692,8 +695,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                   SizedBox(height: adaptiveGap(context, portrait: 24, landscape: 12)),
                   Text(
                     _mediaTotal == 0
-                        ? 'Waiting for content from server…'
-                        : '$_mediaReady of $_mediaTotal media files ready',
+                        ? 'Synchronizing content with the server...'
+                        : 'Downloading assets: $_mediaReady of $_mediaTotal completed',
                     style: const TextStyle(color: Colors.white, fontSize: 18),
                     textAlign: TextAlign.center,
                   ),
@@ -723,8 +726,46 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     return _videoExtensions.any(lower.endsWith);
   }
 
+  Widget _buildSlide(PlayItem item, {bool withCompletion = true}) {
+    final onComplete = withCompletion ? () => _onItemComplete(item) : () {};
+    return _isVideo(item)
+        ? VideoSlide(
+            localPath: item.localPath,
+            duration: item.duration,
+            onComplete: onComplete,
+          )
+        : ImageSlide(
+            localPath: item.localPath,
+            duration: item.duration,
+            onComplete: onComplete,
+          );
+  }
+
   Widget _buildPlayerUi() {
     final item = _playlist[_currentIndex % _playlist.length];
+
+    // PHOENIX (and any future dual-panel type): render the same slide in two
+    // equal halves so the content fills both physical screens simultaneously.
+    // The top half advances the playlist; the bottom half mirrors passively.
+    if (_zoneCount >= 2) {
+      return Scaffold(
+        backgroundColor: AppConfig.background,
+        body: Stack(
+          children: [
+            KeyedSubtree(
+              key: ValueKey<int>(_slideKey),
+              child: Column(
+                children: [
+                  Expanded(child: _buildSlide(item, withCompletion: true)),
+                  Expanded(child: _buildSlide(item, withCompletion: false)),
+                ],
+              ),
+            ),
+            if (kDebugMode) _buildSocketConnectionIndicator(),
+          ],
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: AppConfig.background,
@@ -732,17 +773,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         children: [
           KeyedSubtree(
             key: ValueKey<int>(_slideKey),
-            child: _isVideo(item)
-                ? VideoSlide(
-                    localPath: item.localPath,
-                    duration: item.duration,
-                    onComplete: () => _onItemComplete(item),
-                  )
-                : ImageSlide(
-                    localPath: item.localPath,
-                    duration: item.duration,
-                    onComplete: () => _onItemComplete(item),
-                  ),
+            child: _buildSlide(item),
           ),
           if (kDebugMode) _buildSocketConnectionIndicator(),
         ],

@@ -22,12 +22,12 @@ class WaitingScreen extends StatefulWidget {
 }
 
 class _WaitingScreenState extends State<WaitingScreen> {
-	static const _connectedTitle = 'Screen Connected Successfully';
-	static const _connectedMessage =
-		'Your screen has been detected and is waiting for approval.\n'
-		'Once approved, content will start playing automatically.';
-	static const _connectingTitle = 'Connecting Your Screen';
-	static const _connectingMessage = 'Please wait while we register your screen…';
+	static const _connectedTitle = 'Device Registered Successfully';
+	static const _connectedMessage = 
+		'This display is pending administrator approval.\n'
+		'Playback will begin automatically once authorized in the CMS.';
+	static const _connectingTitle = 'Registering Device';
+	static const _connectingMessage = 'Please wait while we securely connect this device to the server...';
 
 	Timer? _pollTimer;
 	String _hardwareKey = '';
@@ -296,7 +296,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 									),
 									SizedBox(height: beforeId),
 									const Text(
-										'Screen ID',
+										'Display ID',
 										style: TextStyle(color: Colors.white54, fontSize: 14),
 									),
 									const SizedBox(height: 8),
@@ -317,7 +317,7 @@ class _WaitingScreenState extends State<WaitingScreen> {
 									SizedBox(height: beforeButton),
 									TextButton(
 										onPressed: _reconfigure,
-										child: const Text('Edit Settings', style: TextStyle(color: Colors.white54)),
+										child: const Text('Reconfigure Device', style: TextStyle(color: Colors.white54)),
 									),
 								],
 							),
