@@ -23,9 +23,8 @@ class VideoSlide extends StatefulWidget {
 class _VideoSlideState extends State<VideoSlide> {
 	VideoPlayerController? _controller;
 	bool _completed = false;
-	bool _playStarted = false;
 	Timer? _durationTimer;
-	Timer? _playbackWatchdog;
+	Timer? _watchdog;
 
 	@override
 	void initState() {
@@ -37,115 +36,122 @@ class _VideoSlideState extends State<VideoSlide> {
 		final file = File(widget.localPath);
 
 		if (!file.existsSync()) {
-			debugPrint('[VideoSlide] File not found: ${widget.localPath}');
-			_scheduleDurationTimer();
+			debugPrint('[VideoSlide] ❌ File not found: ${widget.localPath}');
+			_startSlotTimer();
 			return;
 		}
 
-		// Reject zero-byte files that may result from a failed download.
 		final fileSize = file.lengthSync();
 		if (fileSize == 0) {
-			debugPrint('[VideoSlide] File is empty (0 bytes): ${widget.localPath}');
-			_scheduleDurationTimer();
+			debugPrint('[VideoSlide] ❌ File is empty: ${widget.localPath}');
+			_startSlotTimer();
 			return;
 		}
 
-		debugPrint('[VideoSlide] Initializing controller for: ${widget.localPath} ($fileSize bytes)');
+		debugPrint('[VideoSlide] 📁 File OK: ${widget.localPath} ($fileSize bytes)');
 
 		VideoPlayerController? ctrl;
 		try {
 			ctrl = VideoPlayerController.file(file);
+			debugPrint('[VideoSlide] ⏳ Calling initialize()...');
 			await ctrl.initialize();
+			debugPrint('[VideoSlide] ✅ initialize() done — isInitialized=${ctrl.value.isInitialized}');
 
 			if (!mounted) {
+				debugPrint('[VideoSlide] ⚠️ Widget unmounted during init');
 				await ctrl.dispose();
 				return;
 			}
 
 			if (!ctrl.value.isInitialized) {
-				debugPrint('[VideoSlide] initialize() returned but isInitialized=false: ${widget.localPath}');
+				debugPrint('[VideoSlide] ❌ isInitialized is false after initialize()');
 				await ctrl.dispose();
-				_scheduleDurationTimer();
+				_startSlotTimer();
 				return;
 			}
 
 			debugPrint(
-				'[VideoSlide] OK — duration=${ctrl.value.duration} '
-				'size=${ctrl.value.size} aspectRatio=${ctrl.value.aspectRatio}',
+				'[VideoSlide] 📐 Video info: '
+				'duration=${ctrl.value.duration} '
+				'size=${ctrl.value.size} '
+				'aspectRatio=${ctrl.value.aspectRatio}'
 			);
 
 			await ctrl.setLooping(true);
+			await ctrl.setVolume(1.0);
+
+			// ──────────────────────────────────────────────────────────────────
+			// STRATEGY: Call play() BEFORE putting the VideoPlayer widget into
+			// the tree. This tells ExoPlayer to start decoding and buffering
+			// frames internally. When Flutter renders the VideoPlayer widget on
+			// the next frame and attaches the SurfaceTexture, ExoPlayer will
+			// immediately start pushing buffered frames to the surface.
+			//
+			// This is the approach used by the official video_player examples
+			// and avoids the race condition where addPostFrameCallback might
+			// fire too late or be skipped.
+			// ──────────────────────────────────────────────────────────────────
+			debugPrint('[VideoSlide] ▶️ Calling play() (before widget tree)...');
+			await ctrl.play();
+			debugPrint('[VideoSlide] ▶️ play() returned — isPlaying=${ctrl.value.isPlaying}');
+
+			if (!mounted) {
+				debugPrint('[VideoSlide] ⚠️ Widget unmounted after play()');
+				await ctrl.dispose();
+				return;
+			}
+
 			ctrl.addListener(_onControllerUpdate);
 
-			// Put the VideoPlayer widget into the tree first so that the Android
-			// SurfaceTexture is created before play() is called.
+			// Now insert the VideoPlayer widget into the tree.
 			setState(() => _controller = ctrl);
 
-			// Schedule the slot duration timer NOW — after we know the file is valid
-			// and the controller is ready. Starting it here (rather than in initState)
-			// means the duration counts from first-frame display, not from widget creation.
-			_scheduleDurationTimer();
+			// Start the slot duration timer only after playback is initiated.
+			_startSlotTimer();
 
-			// Call play() after the next frame so the SurfaceTexture is attached.
-			// We use the captured non-nullable `ctrl` to avoid a null-deref if
-			// _controller is cleared between frames.
-			WidgetsBinding.instance.addPostFrameCallback((_) async {
-				if (!mounted || _completed) {
-					debugPrint('[VideoSlide] Skipping play — mounted=$mounted _completed=$_completed');
-					return;
-				}
-				await _startPlayback(ctrl!);
+			// Install a watchdog: if after 3 seconds the video is still not
+			// playing, try seekTo(0) + play() which resets ExoPlayer's decoder
+			// pipeline. This handles edge cases on certain Android OEMs.
+			_watchdog = Timer(const Duration(seconds: 3), () {
+				_checkAndRetryPlayback();
 			});
 		} catch (e, st) {
-			debugPrint('[VideoSlide] Init failed: ${widget.localPath}\n$e\n$st');
+			debugPrint('[VideoSlide] ❌ Init/play failed: $e\n$st');
 			await ctrl?.dispose();
-			_scheduleDurationTimer();
+			_startSlotTimer();
 		}
 	}
 
-	/// Starts playback and installs a watchdog that retries once if ExoPlayer
-	/// doesn't start rendering within 2 seconds (handles surface-attach delays).
-	Future<void> _startPlayback(VideoPlayerController ctrl) async {
-		if (_playStarted || _completed || !mounted) return;
-		_playStarted = true;
+	void _checkAndRetryPlayback() async {
+		if (!mounted || _completed) return;
+		final c = _controller;
+		if (c == null || !c.value.isInitialized) return;
 
-		try {
-			debugPrint('[VideoSlide] Calling play()');
-			await ctrl.play();
-			debugPrint('[VideoSlide] play() returned — isPlaying=${ctrl.value.isPlaying}');
-		} catch (e) {
-			debugPrint('[VideoSlide] play() threw: $e');
-		}
-
-		// Watchdog: if after 2 seconds the video is not actually playing,
-		// call play() again. This catches ExoPlayer surface-attach races
-		// that the postFrameCallback doesn't fully cover on all Android versions.
-		_playbackWatchdog = Timer(const Duration(seconds: 2), () async {
-			if (!mounted || _completed) return;
-			final c = _controller;
-			if (c != null && c.value.isInitialized && !c.value.isPlaying) {
-				debugPrint('[VideoSlide] Watchdog: video not playing — retrying play()');
-				try {
-					await c.play();
-				} catch (e) {
-					debugPrint('[VideoSlide] Watchdog play() threw: $e');
-				}
+		if (!c.value.isPlaying) {
+			debugPrint('[VideoSlide] 🔁 Watchdog: NOT playing after 3s — retry with seek+play');
+			try {
+				await c.seekTo(Duration.zero);
+				await c.play();
+				debugPrint('[VideoSlide] 🔁 Watchdog play() returned — isPlaying=${c.value.isPlaying}');
+			} catch (e) {
+				debugPrint('[VideoSlide] 🔁 Watchdog retry failed: $e');
 			}
-		});
+		} else {
+			debugPrint('[VideoSlide] ✅ Watchdog: video IS playing — all good');
+		}
 	}
 
-	/// Schedules the slot-duration timer that advances the playlist.
-	void _scheduleDurationTimer() {
+	void _startSlotTimer() {
 		_durationTimer?.cancel();
-		final playSeconds = widget.duration > 0 ? widget.duration : 30;
-		_durationTimer = Timer(Duration(seconds: playSeconds), _finish);
+		final seconds = widget.duration > 0 ? widget.duration : 30;
+		_durationTimer = Timer(Duration(seconds: seconds), _finish);
 	}
 
 	void _onControllerUpdate() {
 		if (_completed || _controller == null) return;
 		final c = _controller!;
 		if (c.value.hasError) {
-			debugPrint('[VideoSlide] Playback error: ${c.value.errorDescription}');
+			debugPrint('[VideoSlide] ❌ Playback error: ${c.value.errorDescription}');
 		}
 	}
 
@@ -158,7 +164,7 @@ class _VideoSlideState extends State<VideoSlide> {
 	@override
 	void dispose() {
 		_durationTimer?.cancel();
-		_playbackWatchdog?.cancel();
+		_watchdog?.cancel();
 		_controller?.removeListener(_onControllerUpdate);
 		_controller?.dispose();
 		super.dispose();
@@ -168,17 +174,20 @@ class _VideoSlideState extends State<VideoSlide> {
 	Widget build(BuildContext context) {
 		final c = _controller;
 
-		// Black placeholder while the controller is loading or if init failed.
+		// Black placeholder while loading or if init failed.
 		if (c == null || !c.value.isInitialized) {
-			return const ColoredBox(color: Colors.black);
+			return const SizedBox.expand(child: ColoredBox(color: Colors.black));
 		}
 
-		return ColoredBox(
-			color: Colors.black,
-			child: Center(
-				child: AspectRatio(
-					aspectRatio: c.value.aspectRatio,
-					child: VideoPlayer(c),
+		// SizedBox.expand ensures the video fills the entire parent (Stack child).
+		return SizedBox.expand(
+			child: ColoredBox(
+				color: Colors.black,
+				child: Center(
+					child: AspectRatio(
+						aspectRatio: c.value.aspectRatio,
+						child: VideoPlayer(c),
+					),
 				),
 			),
 		);
