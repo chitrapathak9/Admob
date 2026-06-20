@@ -267,64 +267,62 @@ class _WaitingScreenState extends State<WaitingScreen> {
 		return Scaffold(
 			backgroundColor: AppConfig.background,
 			body: SafeArea(
-				child: LayoutBuilder(
-					builder: (context, constraints) {
-						return SingleChildScrollView(
-							padding: padding,
-							child: ConstrainedBox(
-								constraints: BoxConstraints(minHeight: constraints.maxHeight - padding.vertical),
-								child: Column(
-									mainAxisAlignment: MainAxisAlignment.center,
-									children: [
-										TheadbookLogo(height: logoHeight),
-										SizedBox(height: afterLogo),
-										const CircularProgressIndicator(color: AppConfig.accentOrange),
-										SizedBox(height: afterSpinner),
-										Text(
-											_title,
-											style: const TextStyle(
-												color: Colors.white,
-												fontSize: 20,
-												fontWeight: FontWeight.bold,
-											),
-											textAlign: TextAlign.center,
+				child: Center(
+					child: SingleChildScrollView(
+						padding: padding,
+						child: ConstrainedBox(
+							constraints: const BoxConstraints(maxWidth: 520),
+							child: Column(
+								mainAxisAlignment: MainAxisAlignment.center,
+								children: [
+									TheadbookLogo(height: logoHeight),
+									SizedBox(height: afterLogo),
+									const CircularProgressIndicator(color: AppConfig.accentOrange),
+									SizedBox(height: afterSpinner),
+									Text(
+										_title,
+										style: const TextStyle(
+											color: Colors.white,
+											fontSize: 20,
+											fontWeight: FontWeight.bold,
 										),
-										const SizedBox(height: 12),
-										Text(
-											_message,
-											style: const TextStyle(color: Colors.white54, fontSize: 14),
-											textAlign: TextAlign.center,
+										textAlign: TextAlign.center,
+									),
+									const SizedBox(height: 12),
+									Text(
+										_message,
+										style: const TextStyle(color: Colors.white54, fontSize: 14),
+										textAlign: TextAlign.center,
+									),
+									SizedBox(height: beforeId),
+									const Text(
+										'Screen ID',
+										style: TextStyle(color: Colors.white54, fontSize: 14),
+									),
+									const SizedBox(height: 8),
+									SelectableText(
+										_hardwareKey,
+										style: TextStyle(
+											color: AppConfig.accentOrange,
+											fontSize: MediaQuery.sizeOf(context).width < 360 ? 14 : 18,
+											fontWeight: FontWeight.bold,
+											letterSpacing: 1,
 										),
-										SizedBox(height: beforeId),
-										const Text(
-											'Screen ID',
-											style: TextStyle(color: Colors.white54, fontSize: 14),
-										),
-										const SizedBox(height: 8),
-										SelectableText(
-											_hardwareKey,
-											style: TextStyle(
-												color: AppConfig.accentOrange,
-												fontSize: MediaQuery.sizeOf(context).width < 360 ? 14 : 18,
-												fontWeight: FontWeight.bold,
-												letterSpacing: 1,
-											),
-											textAlign: TextAlign.center,
-										),
-										if (_error != null) ...[
-											const SizedBox(height: 16),
-											Text(_error!, style: const TextStyle(color: Colors.white38), textAlign: TextAlign.center),
-										],
-										SizedBox(height: beforeButton),
-										TextButton(
-											onPressed: _reconfigure,
-											child: const Text('Edit Settings', style: TextStyle(color: Colors.white54)),
-										),
+										textAlign: TextAlign.center,
+									),
+									if (_error != null) ...[
+										const SizedBox(height: 16),
+										Text(_error!, style: const TextStyle(color: Colors.white38), textAlign: TextAlign.center),
 									],
-								),
+									SizedBox(height: beforeButton),
+									TextButton(
+										onPressed: _reconfigure,
+										child: const Text('Edit Settings', style: TextStyle(color: Colors.white54)),
+									),
+								],
 							),
-						);
-					},
+						),
+					),
 				),
 			),
 		);

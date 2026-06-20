@@ -127,7 +127,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _isLoading = true;
       _errorMessage = null;
       _noContent = false;
-      _loadingMessage = 'Loading content manifest...';
+      _loadingMessage = 'Wait! While we are fetching content for this screen...';
     });
 
     _retryTimer?.cancel();
@@ -149,7 +149,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
 
       if (!mounted) return false;
-      setState(() => _loadingMessage = 'Downloading media...');
+      setState(() => _loadingMessage = 'Downloading media assets for playback...');
 
       await DownloadService.instance.downloadManifestMedia(manifest.media);
       final playlist = await _buildPlaylistFromManifest(manifest);
@@ -575,38 +575,61 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     return Scaffold(
       backgroundColor: AppConfig.background,
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'Could not load content',
-                style: TextStyle(color: Colors.white, fontSize: 22),
-                textAlign: TextAlign.center,
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 600),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Icon(Icons.display_settings_rounded, size: 64, color: Colors.white54),
+                  const SizedBox(height: 24),
+                  const Text(
+                    'No Campaign Active or Not Assigned',
+                    style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Please contact your administrator to assign this screen to a display group or campaign to visualize the Ads.',
+                    style: TextStyle(color: Colors.white70, fontSize: 16, height: 1.4),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  if (_errorMessage != null && _errorMessage!.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.black26,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'Details: $_errorMessage',
+                        style: const TextStyle(color: Colors.white38, fontSize: 13),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  const SizedBox(height: 32),
+                  ElevatedButton(
+                    onPressed: _onRetryTap,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _loadingOrange,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: const Text('Retry Connection', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Will retry automatically in ${AppConfig.manifestRetrySeconds} seconds',
+                    style: const TextStyle(color: Colors.white24, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              Text(
-                _errorMessage ?? '',
-                style: const TextStyle(color: Colors.white38, fontSize: 14),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: _onRetryTap,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _loadingOrange,
-                  foregroundColor: Colors.black,
-                ),
-                child: const Text('Retry', style: TextStyle(fontSize: 18)),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Will retry automatically in ${AppConfig.manifestRetrySeconds} seconds',
-                style: const TextStyle(color: Colors.white24, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ],
+            ),
           ),
         ),
       ),
