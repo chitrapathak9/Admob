@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 import '../models/screen_connect_data.dart';
 import '../services/api_url_service.dart';
+import '../services/battery_optimization_service.dart';
 import '../services/screen_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmds_service.dart';
@@ -25,6 +26,8 @@ class _SetupScreenState extends State<SetupScreen> {
 	final _apiUrlController = TextEditingController();
 	bool _loading = false;
 	String? _error;
+	bool _alwaysOnDisplay = true;
+	bool _isIgnoringBatteryOpt = true;
 
 	@override
 	void initState() {
@@ -37,6 +40,9 @@ class _SetupScreenState extends State<SetupScreen> {
 		final savedApiUrl = await storage.loadApiBaseUrl();
 		_apiUrlController.text = savedApiUrl ?? AppConfig.defaultBaseUrl;
 		_screenNameController.text = await defaultDisplayName();
+		_alwaysOnDisplay = await storage.isAlwaysOnDisplayEnabled();
+		_isIgnoringBatteryOpt = await BatteryOptimizationService.isIgnoringBatteryOptimizations();
+		if (mounted) setState(() {});
 	}
 
 	@override
@@ -178,6 +184,78 @@ class _SetupScreenState extends State<SetupScreen> {
 										label: 'Screen Name',
 										controller: _screenNameController,
 									),
+									const SizedBox(height: 24),
+									const Align(
+										alignment: Alignment.centerLeft,
+										child: Text(
+											'Settings',
+											style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+										),
+									),
+									const SizedBox(height: 8),
+									Container(
+										decoration: BoxDecoration(
+											color: Colors.white.withOpacity(0.05),
+											borderRadius: BorderRadius.circular(8),
+										),
+										child: SwitchListTile(
+											title: const Text('Always On Display', style: TextStyle(color: Colors.white)),
+											subtitle: const Text('Keep screen awake while player is active', style: TextStyle(color: Colors.white54, fontSize: 12)),
+											value: _alwaysOnDisplay,
+											activeColor: AppConfig.accentOrange,
+											onChanged: (val) {
+												setState(() => _alwaysOnDisplay = val);
+												StorageService.instance.setAlwaysOnDisplay(val);
+											},
+										),
+									),
+									if (!_isIgnoringBatteryOpt) ...[
+										const SizedBox(height: 16),
+										Container(
+											padding: const EdgeInsets.all(12),
+											decoration: BoxDecoration(
+												color: Colors.red.withOpacity(0.1),
+												border: Border.all(color: Colors.red.withOpacity(0.3)),
+												borderRadius: BorderRadius.circular(8),
+											),
+											child: Column(
+												crossAxisAlignment: CrossAxisAlignment.stretch,
+												children: [
+													const Row(
+														children: [
+															Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 20),
+															SizedBox(width: 8),
+															Expanded(
+																child: Text(
+																	'Battery Optimization Enabled',
+																	style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+																),
+															),
+														],
+													),
+													const SizedBox(height: 8),
+													const Text(
+														'Android may kill or pause the player in the background. Please disable battery optimization for this app.',
+														style: TextStyle(color: Colors.white70, fontSize: 13),
+													),
+													const SizedBox(height: 12),
+													ElevatedButton(
+														onPressed: () async {
+															await BatteryOptimizationService.requestIgnoreBatteryOptimizations();
+															final isIgnoring = await BatteryOptimizationService.isIgnoringBatteryOptimizations();
+															setState(() => _isIgnoringBatteryOpt = isIgnoring);
+														},
+														style: ElevatedButton.styleFrom(
+															backgroundColor: Colors.redAccent,
+															foregroundColor: Colors.white,
+															minimumSize: const Size.fromHeight(40),
+														),
+														child: const Text('Open Battery Settings'),
+													),
+												],
+											),
+										),
+									],
 									if (_error != null) ...[
 										const SizedBox(height: 16),
 										Text(

@@ -32,7 +32,7 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
-class _PlayerScreenState extends State<PlayerScreen> {
+class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver {
   static const Color _loadingOrange = Color(0xFFF97316);
 
   List<PlayItem> _playlist = [];
@@ -49,16 +49,40 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isLoading = true;
   String _loadingMessage = 'Connecting to server...';
   String? _errorMessage;
+  bool _alwaysOnDisplay = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     // Allow all orientations until we know the layout's intended orientation.
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    WakelockPlus.enable();
+    _initWakelock();
     _registerSocketListeners();
     _bootstrap();
+  }
+
+  Future<void> _initWakelock() async {
+    _alwaysOnDisplay = await StorageService.instance.isAlwaysOnDisplayEnabled();
+    _applyWakelock();
+  }
+
+  void _applyWakelock() {
+    if (_alwaysOnDisplay) {
+      WakelockPlus.enable();
+    } else {
+      WakelockPlus.disable();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _applyWakelock();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      WakelockPlus.disable();
+    }
   }
 
   void _registerSocketListeners() {
@@ -469,6 +493,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     final bus = SocketEventBus.instance;
     bus.off(SocketEvent.syncNow, _handleSocketContentChange);
     bus.off(SocketEvent.contentUpdated, _handleSocketContentChange);

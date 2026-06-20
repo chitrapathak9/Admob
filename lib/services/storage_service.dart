@@ -24,6 +24,7 @@ const kManifestHash = 'manifest_hash';
 const kCurrentLayoutId = 'current_layout_id';
 const kConfigJson = 'player_config_json';
 const kScreenConnectCompleted = 'screen_connect_completed';
+const kAlwaysOnDisplay = 'always_on_display';
 
 class StorageService {
 	StorageService._();
@@ -225,5 +226,15 @@ class StorageService {
 	Future<String?> loadManifestHash() async {
 		final p = await prefs;
 		return p.getString(kManifestHash);
+	}
+
+	Future<bool> isAlwaysOnDisplayEnabled() async {
+		final p = await prefs;
+		return p.getBool(kAlwaysOnDisplay) ?? true;
+	}
+
+	Future<void> setAlwaysOnDisplay(bool value) async {
+		final p = await prefs;
+		await p.setBool(kAlwaysOnDisplay, value);
 	}
 }
