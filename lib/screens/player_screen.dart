@@ -619,7 +619,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                     onPressed: _onRetryTap,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _loadingOrange,
-                      foregroundColor: Colors.black,
+                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                     child: const Text('Attempt Reconnection', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
@@ -705,7 +705,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                     onPressed: _onRetryTap,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _loadingOrange,
-                      foregroundColor: Colors.black,
+                      foregroundColor: Colors.white,
                     ),
                     child: const Text('Retry now', style: TextStyle(fontSize: 18)),
                   ),

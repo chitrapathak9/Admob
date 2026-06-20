@@ -3,13 +3,13 @@ import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 import '../models/screen_connect_data.dart';
 import '../services/api_url_service.dart';
-import '../services/battery_optimization_service.dart';
 import '../services/screen_service.dart';
 import '../services/storage_service.dart';
 import '../services/xmds_service.dart';
 import '../utils/app_logger.dart';
 import '../utils/device_name.dart';
 import '../widgets/adaptive_padding.dart';
+import '../widgets/permission_flow_dialog.dart';
 import '../widgets/theadbook_logo.dart';
 import 'player_screen.dart';
 import 'waiting_screen.dart';
@@ -26,8 +26,6 @@ class _SetupScreenState extends State<SetupScreen> {
 	final _apiUrlController = TextEditingController();
 	bool _loading = false;
 	String? _error;
-	bool _alwaysOnDisplay = true;
-	bool _isIgnoringBatteryOpt = true;
 
 	@override
 	void initState() {
@@ -40,8 +38,6 @@ class _SetupScreenState extends State<SetupScreen> {
 		final savedApiUrl = await storage.loadApiBaseUrl();
 		_apiUrlController.text = savedApiUrl ?? AppConfig.defaultBaseUrl;
 		_screenNameController.text = await defaultDisplayName();
-		_alwaysOnDisplay = await storage.isAlwaysOnDisplayEnabled();
-		_isIgnoringBatteryOpt = await BatteryOptimizationService.isIgnoringBatteryOptimizations();
 		if (mounted) setState(() {});
 	}
 
@@ -90,6 +86,15 @@ class _SetupScreenState extends State<SetupScreen> {
 			setState(() => _error = 'Please enter a server address');
 			return;
 		}
+
+		// Run the step-by-step permission flow (explanation → battery → wakelock → summary).
+		// Returns null if the user cancelled at the explanation screen.
+		// Returns a PermissionResult if they completed the flow (granted or denied — either way we proceed).
+		final permResult = await showPermissionFlowDialog(context);
+		if (permResult == null || !mounted) return;
+
+		// Persist always-on display preference (wakelock was already enabled inside the dialog).
+		await StorageService.instance.setAlwaysOnDisplay(permResult.wakelockEnabled);
 
 		setState(() {
 			_loading = true;
@@ -169,7 +174,7 @@ class _SetupScreenState extends State<SetupScreen> {
 									),
 									const SizedBox(height: 12),
 									const Text(
-										'Please provide your server credentials to link this device to your signage network.',
+										'Enter your server address and a name for this display to link it to the signage network.',
 										style: TextStyle(color: Colors.white54, fontSize: 14),
 										textAlign: TextAlign.center,
 									),
@@ -184,78 +189,6 @@ class _SetupScreenState extends State<SetupScreen> {
 										label: 'Display Name',
 										controller: _screenNameController,
 									),
-									const SizedBox(height: 24),
-									const Align(
-										alignment: Alignment.centerLeft,
-										child: Text(
-											'Device Settings',
-											style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-										),
-									),
-									const SizedBox(height: 8),
-									Container(
-										decoration: BoxDecoration(
-											color: Colors.white.withOpacity(0.05),
-											borderRadius: BorderRadius.circular(8),
-										),
-										child: SwitchListTile(
-											title: const Text('Always On Display', style: TextStyle(color: Colors.white)),
-											subtitle: const Text('Prevent the display from sleeping during playback', style: TextStyle(color: Colors.white54, fontSize: 12)),
-											value: _alwaysOnDisplay,
-											activeColor: AppConfig.accentOrange,
-											onChanged: (val) {
-												setState(() => _alwaysOnDisplay = val);
-												StorageService.instance.setAlwaysOnDisplay(val);
-											},
-										),
-									),
-									if (!_isIgnoringBatteryOpt) ...[
-										const SizedBox(height: 16),
-										Container(
-											padding: const EdgeInsets.all(12),
-											decoration: BoxDecoration(
-												color: Colors.red.withOpacity(0.1),
-												border: Border.all(color: Colors.red.withOpacity(0.3)),
-												borderRadius: BorderRadius.circular(8),
-											),
-											child: Column(
-												crossAxisAlignment: CrossAxisAlignment.stretch,
-												children: [
-													const Row(
-														children: [
-															Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 20),
-															SizedBox(width: 8),
-															Expanded(
-																child: Text(
-																	'Background Execution Restricted',
-																	style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
-																),
-															),
-														],
-													),
-													const SizedBox(height: 8),
-													const Text(
-														'To ensure uninterrupted playback, please exempt this application from Android battery optimizations.',
-														style: TextStyle(color: Colors.white70, fontSize: 13),
-													),
-													const SizedBox(height: 12),
-													ElevatedButton(
-														onPressed: () async {
-															await BatteryOptimizationService.requestIgnoreBatteryOptimizations();
-															final isIgnoring = await BatteryOptimizationService.isIgnoringBatteryOptimizations();
-															setState(() => _isIgnoringBatteryOpt = isIgnoring);
-														},
-														style: ElevatedButton.styleFrom(
-															backgroundColor: Colors.redAccent,
-															foregroundColor: Colors.white,
-															minimumSize: const Size.fromHeight(40),
-														),
-														child: const Text('Open Battery Settings'),
-													),
-												],
-											),
-										),
-									],
 									if (_error != null) ...[
 										const SizedBox(height: 16),
 										Text(
@@ -272,15 +205,15 @@ class _SetupScreenState extends State<SetupScreen> {
 											onPressed: _loading ? null : _connect,
 											style: ElevatedButton.styleFrom(
 												backgroundColor: AppConfig.accentOrange,
-												foregroundColor: Colors.black,
+												foregroundColor: Colors.white,
 											),
 											child: _loading
 												? const SizedBox(
 													width: 24,
 													height: 24,
-													child: CircularProgressIndicator(strokeWidth: 2),
+													child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
 												)
-												: const Text('Register Device', style: TextStyle(fontSize: 18)),
+												: const Text('Register Device', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
 										),
 									),
 								],
@@ -305,11 +238,11 @@ class _SetupScreenState extends State<SetupScreen> {
 				labelText: label,
 				labelStyle: const TextStyle(color: Colors.white54),
 				enabledBorder: OutlineInputBorder(
-					borderSide: BorderSide(color: Colors.white24),
+					borderSide: const BorderSide(color: Colors.white24),
 					borderRadius: BorderRadius.circular(8),
 				),
 				focusedBorder: OutlineInputBorder(
-					borderSide: BorderSide(color: AppConfig.accentOrange),
+					borderSide: const BorderSide(color: AppConfig.accentOrange),
 					borderRadius: BorderRadius.circular(8),
 				),
 			),
