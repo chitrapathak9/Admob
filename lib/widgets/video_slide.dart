@@ -28,8 +28,8 @@ class _VideoSlideState extends State<VideoSlide> {
 	@override
 	void initState() {
 		super.initState();
-		// Duration timer drives playlist advancement regardless of video length.
-		// A 10 s clip scheduled for 30 s loops three times, then we move on.
+		// Playlist advancement is driven by this timer, not the video's natural length.
+		// A 10 s clip in a 30 s slot loops 3× and then advances.
 		final playSeconds = widget.duration > 0 ? widget.duration : 30;
 		_durationTimer = Timer(Duration(seconds: playSeconds), _finish);
 		_init();
@@ -38,10 +38,10 @@ class _VideoSlideState extends State<VideoSlide> {
 	Future<void> _init() async {
 		final file = File(widget.localPath);
 
-		// Guard: file must exist before handing it to ExoPlayer.
 		if (!file.existsSync()) {
 			debugPrint('[VideoSlide] File not found: ${widget.localPath}');
-				_finish();
+			// Do NOT call _finish here — let the duration timer fire naturally
+			// so the slot length is respected even when the file is missing.
 			return;
 		}
 
@@ -49,30 +49,49 @@ class _VideoSlideState extends State<VideoSlide> {
 		try {
 			ctrl = VideoPlayerController.file(file);
 			await ctrl.initialize();
-			await ctrl.setLooping(true);
-			ctrl.addListener(_onTick);
 
 			if (!mounted) {
 				await ctrl.dispose();
 				return;
 			}
 
-			await ctrl.play();
+			if (!ctrl.value.isInitialized) {
+				debugPrint('[VideoSlide] initialize() returned but isInitialized=false: ${widget.localPath}');
+				await ctrl.dispose();
+				return;
+			}
+
+			await ctrl.setLooping(true);
+			ctrl.addListener(_onControllerUpdate);
+
+			// ── CRITICAL ORDER ──────────────────────────────────────────────────
+			// 1. Put the VideoPlayer widget into the tree FIRST.
+			//    This lets the Flutter engine create the SurfaceTexture /
+			//    AndroidExternalTexture that ExoPlayer will render frames onto.
 			setState(() => _controller = ctrl);
+
+			// 2. Start playback AFTER the next frame is painted.
+			//    Calling play() before the texture is attached causes ExoPlayer to
+			//    decode internally but have nothing to render to — the video appears
+			//    frozen on the first frame (the classic "thumbnail" symptom).
+			WidgetsBinding.instance.addPostFrameCallback((_) {
+				if (mounted && !_completed) {
+					_controller?.play();
+				}
+			});
 		} catch (e, st) {
 			debugPrint('[VideoSlide] Init failed path=${widget.localPath}: $e');
 			debugPrint('[VideoSlide] Stack: $st');
 			await ctrl?.dispose();
-				// Let the duration timer call _finish naturally so the slot isn't skipped
-			// instantly — the black frame plays out the remaining scheduled duration.
+			// Duration timer drives playlist advancement; no need to call _finish here.
 		}
 	}
 
-	void _onTick() {
+	void _onControllerUpdate() {
 		if (_completed || _controller == null) return;
 		if (_controller!.value.hasError) {
 			debugPrint('[VideoSlide] Playback error: ${_controller!.value.errorDescription}');
-			_finish();
+			// Let the timer expire naturally instead of skipping immediately.
 		}
 	}
 
@@ -85,7 +104,7 @@ class _VideoSlideState extends State<VideoSlide> {
 	@override
 	void dispose() {
 		_durationTimer?.cancel();
-		_controller?.removeListener(_onTick);
+		_controller?.removeListener(_onControllerUpdate);
 		_controller?.dispose();
 		super.dispose();
 	}
@@ -94,23 +113,20 @@ class _VideoSlideState extends State<VideoSlide> {
 	Widget build(BuildContext context) {
 		final c = _controller;
 
-		// Initialising or failed — show a plain black frame.
-		// On failure the duration timer will advance the playlist at the right time.
+		// Show black while the controller is loading or if init failed.
 		if (c == null || !c.value.isInitialized) {
 			return const ColoredBox(color: Colors.black);
 		}
 
+		// AspectRatio is the canonical video_player approach — it is always
+		// correct once isInitialized=true and avoids the 0×0 invisible-player
+		// issue that occurs when using c.value.size.width/height directly.
 		return ColoredBox(
 			color: Colors.black,
-			child: SizedBox.expand(
-				child: FittedBox(
-					// BoxFit.contain preserves the video's native aspect ratio.
-					fit: BoxFit.contain,
-					child: SizedBox(
-						width: c.value.size.width,
-						height: c.value.size.height,
-						child: VideoPlayer(c),
-					),
+			child: Center(
+				child: AspectRatio(
+					aspectRatio: c.value.aspectRatio,
+					child: VideoPlayer(c),
 				),
 			),
 		);
