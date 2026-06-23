@@ -3,19 +3,22 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../config/app_config.dart';
 import '../services/battery_optimization_service.dart';
+import '../services/overlay_permission_service.dart';
 
 // ── Permission result ─────────────────────────────────────────────────────────
 
 class PermissionResult {
   final bool batteryExempt;
+  final bool overlayGranted;
   final bool wakelockEnabled;
 
   const PermissionResult({
     required this.batteryExempt,
+    required this.overlayGranted,
     required this.wakelockEnabled,
   });
 
-  bool get allGranted => batteryExempt && wakelockEnabled;
+  bool get allGranted => batteryExempt && overlayGranted && wakelockEnabled;
 }
 
 // ── Public helper ─────────────────────────────────────────────────────────────
@@ -36,6 +39,7 @@ Future<PermissionResult?> showPermissionFlowDialog(BuildContext context) {
 enum _Step {
   explanation,   // "Why we need these"
   battery,       // requesting battery optimisation exemption
+  overlay,       // requesting display-over-other-apps permission
   wakelock,      // enabling always-on display
   summary,       // results + Continue button
 }
@@ -50,6 +54,7 @@ class _PermissionFlowDialog extends StatefulWidget {
 class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
   _Step _step = _Step.explanation;
   bool? _batteryGranted;
+  bool? _overlayGranted;
   bool? _wakelockGranted;
 
   // ── Step runners ────────────────────────────────────────────────────────────
@@ -57,17 +62,20 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
   Future<void> _runPermissions() async {
     // ── Step 1: Battery Optimisation ─────────────────────────────────────────
     setState(() => _step = _Step.battery);
-
-    // requestIgnoreBatteryOptimizations now properly awaits the user's response
-    // (ActivityResultLauncher in MainActivity.kt).
     final battery =
         await BatteryOptimizationService.requestIgnoreBatteryOptimizations();
     setState(() => _batteryGranted = battery);
-
-    // Brief pause so the user sees the battery result before we move on.
     await Future<void>.delayed(const Duration(milliseconds: 700));
 
-    // ── Step 2: Wakelock (Keep Screen On) ────────────────────────────────────
+    // ── Step 2: Display Over Other Apps ──────────────────────────────────────
+    // Opens Settings.ACTION_MANAGE_OVERLAY_PERMISSION — user toggles the switch
+    // in the system settings screen and we read the result on return.
+    setState(() => _step = _Step.overlay);
+    final overlay = await OverlayPermissionService.requestOverlayPermission();
+    setState(() => _overlayGranted = overlay);
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+
+    // ── Step 3: Wakelock (Keep Screen On) ────────────────────────────────────
     // WAKE_LOCK is a normal manifest permission — auto-granted at install.
     // No system popup is shown; we simply enable it programmatically.
     setState(() => _step = _Step.wakelock);
@@ -90,6 +98,7 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
     Navigator.of(context).pop(
       PermissionResult(
         batteryExempt: _batteryGranted ?? false,
+        overlayGranted: _overlayGranted ?? false,
         wakelockEnabled: _wakelockGranted ?? false,
       ),
     );
@@ -159,6 +168,8 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
         return _buildExplanation();
       case _Step.battery:
         return _buildBatteryStep();
+      case _Step.overlay:
+        return _buildOverlayStep();
       case _Step.wakelock:
         return _buildWakelockStep();
       case _Step.summary:
@@ -174,7 +185,7 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'To run as a reliable digital signage display, this app needs two system permissions. We\'ll request them one at a time.',
+          'To run as a reliable digital signage display, this app needs three system permissions. We\'ll request them one at a time.',
           style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
         ),
         const SizedBox(height: 20),
@@ -188,6 +199,14 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
         const SizedBox(height: 14),
         _explanationRow(
           step: '2',
+          icon: Icons.layers_outlined,
+          title: 'Display Over Other Apps',
+          description:
+              'Opens Android Settings. Enable the toggle so this app can appear on top of other apps at all times.',
+        ),
+        const SizedBox(height: 14),
+        _explanationRow(
+          step: '3',
           icon: Icons.brightness_high_outlined,
           title: 'Keep Screen On',
           description:
@@ -339,13 +358,63 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
     );
   }
 
+  // ── Overlay step ────────────────────────────────────────────────────────────
+
+  Widget _buildOverlayStep() {
+    final granted = _overlayGranted;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _stepProgressBar(current: 2),
+        const SizedBox(height: 24),
+        _stepIcon(Icons.layers_outlined, granted: granted),
+        const SizedBox(height: 16),
+        const Text(
+          'Display Over Other Apps',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          granted == null
+              ? 'Settings has opened.\nFind this app and enable "Allow display over other apps".'
+              : granted
+                  ? 'Permission granted successfully.'
+                  : 'Permission denied. Content may be hidden behind other apps.',
+          style: TextStyle(
+            color: granted == null
+                ? Colors.white54
+                : granted
+                    ? Colors.greenAccent
+                    : Colors.orangeAccent,
+            fontSize: 13,
+            height: 1.4,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 24),
+        if (granted == null)
+          const CircularProgressIndicator(
+            color: AppConfig.accentOrange,
+            strokeWidth: 2,
+          )
+        else
+          _statusChip(granted: granted),
+      ],
+    );
+  }
+
   // ── Wakelock step ───────────────────────────────────────────────────────────
 
   Widget _buildWakelockStep() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _stepProgressBar(current: 2),
+        _stepProgressBar(current: 3),
         const SizedBox(height: 24),
         _stepIcon(Icons.brightness_high_outlined, granted: null),
         const SizedBox(height: 16),
@@ -377,8 +446,9 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
 
   Widget _buildSummary() {
     final batteryOk = _batteryGranted ?? false;
+    final overlayOk = _overlayGranted ?? false;
     final wakelockOk = _wakelockGranted ?? false;
-    final allOk = batteryOk && wakelockOk;
+    final allOk = batteryOk && overlayOk && wakelockOk;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -388,6 +458,12 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
           icon: Icons.battery_saver_outlined,
           label: 'Battery Optimization Exempt',
           granted: batteryOk,
+        ),
+        const SizedBox(height: 12),
+        _summaryRow(
+          icon: Icons.layers_outlined,
+          label: 'Display Over Other Apps',
+          granted: overlayOk,
         ),
         const SizedBox(height: 12),
         _summaryRow(
@@ -484,7 +560,7 @@ class _PermissionFlowDialogState extends State<_PermissionFlowDialog> {
   Widget _stepProgressBar({required int current}) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(2, (i) {
+      children: List.generate(3, (i) {
         final active = i + 1 == current;
         final done = i + 1 < current;
         return Container(

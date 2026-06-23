@@ -3,6 +3,7 @@ import 'package:disk_space_2/disk_space_2.dart';
 import '../config/app_config.dart';
 import '../models/screen_status_data.dart';
 import '../utils/app_logger.dart';
+import 'display_manager_service.dart';
 import 'download_service.dart';
 import 'screenshot_service.dart';
 import 'screen_service.dart';
@@ -52,6 +53,7 @@ class SocketEventHandler {
 		_onScreenshotCatchAll();
 		_onStorageInfoRequested();
 		_onStorageClearRequested();
+		_onGetDisplayCount();
 		AppLogger.socket('All socket event listeners registered (socketGen=$generation)');
 	}
 
@@ -66,6 +68,7 @@ class SocketEventHandler {
 		_socketService.off('schedule:paused');
 		_socketService.off('screen:storage:info:request');
 		_socketService.off('screen:storage:clear:request');
+		_socketService.off('get_display_count');
 		for (final event in _screenshotSocketEvents) {
 			_socketService.off(event);
 		}
@@ -189,6 +192,19 @@ class SocketEventHandler {
 					freedMb: freedMb,
 				);
 			});
+		});
+	}
+
+	/// Backend forwards `get_display_count` from the admin panel to this device.
+	/// Responds immediately with the number of physical displays the OS reports.
+	void _onGetDisplayCount() {
+		_socketService.on('get_display_count', (data) {
+			AppLogger.socketEventReceived('get_display_count', data);
+			final displayId =
+				data is Map ? (data['displayId'] as num?)?.toInt() ?? 0 : 0;
+			final payload =
+				DisplayManagerService.instance.getDisplayCountPayload(displayId);
+			_socketService.emit('display_count_response', payload);
 		});
 	}
 

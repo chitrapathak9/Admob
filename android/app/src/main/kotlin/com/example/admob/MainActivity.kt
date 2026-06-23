@@ -13,26 +13,33 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val channel = "com.theadbook.player/battery"
+    private val batteryChannel = "com.theadbook.player/battery"
+    private val overlayChannel = "com.theadbook.player/overlay"
 
-    // Holds the pending Flutter result until the user dismisses the battery settings screen.
-    private var pendingResult: MethodChannel.Result? = null
+    // Pending results held until the user returns from the respective settings screen.
+    private var pendingBatteryResult: MethodChannel.Result? = null
+    private var pendingOverlayResult: MethodChannel.Result? = null
 
-    // ActivityResultLauncher so we are notified when the user returns from the
-    // battery optimisation settings intent (granted or denied).
     private lateinit var batteryLauncher: ActivityResultLauncher<Intent>
+    private lateinit var overlayLauncher: ActivityResultLauncher<Intent>
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Register the launcher before the activity is started.
         batteryLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { _ ->
-            // User returned from system settings — check the actual status now.
             val granted = isBatteryOptimisationIgnored()
-            pendingResult?.success(granted)
-            pendingResult = null
+            pendingBatteryResult?.success(granted)
+            pendingBatteryResult = null
+        }
+
+        overlayLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { _ ->
+            val granted = canDrawOverlays()
+            pendingOverlayResult?.success(granted)
+            pendingOverlayResult = null
         }
     }
 
@@ -41,7 +48,7 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
-            channel,
+            batteryChannel,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "isIgnoringBatteryOptimizations" -> {
@@ -50,11 +57,10 @@ class MainActivity : FlutterActivity() {
                 "requestIgnoreBatteryOptimizations" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         if (isBatteryOptimisationIgnored()) {
-                            // Already granted — resolve immediately, no need to open settings.
                             result.success(true)
                             return@setMethodCallHandler
                         }
-                        pendingResult = result
+                        pendingBatteryResult = result
                         val intent = Intent(
                             Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                         ).apply {
@@ -62,7 +68,36 @@ class MainActivity : FlutterActivity() {
                         }
                         batteryLauncher.launch(intent)
                     } else {
-                        // Pre-M devices don't have battery optimisations.
+                        result.success(true)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            overlayChannel,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "canDrawOverlays" -> {
+                    result.success(canDrawOverlays())
+                }
+                "requestOverlayPermission" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        if (canDrawOverlays()) {
+                            result.success(true)
+                            return@setMethodCallHandler
+                        }
+                        pendingOverlayResult = result
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        ).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                        overlayLauncher.launch(intent)
+                    } else {
+                        // Pre-M devices have overlay allowed by default.
                         result.success(true)
                     }
                 }
@@ -75,5 +110,10 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun canDrawOverlays(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
+        return Settings.canDrawOverlays(this)
     }
 }

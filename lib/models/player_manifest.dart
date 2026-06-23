@@ -12,6 +12,9 @@ class ManifestMediaItem {
 	/// Layout canvas dimensions sent by the backend (0 when absent).
 	final int layoutWidth;
 	final int layoutHeight;
+	/// Content orientation as mastered: 'portrait' or 'landscape'.
+	/// Used by the secondary display engine to rotate mismatched content.
+	final String orientation;
 
 	const ManifestMediaItem({
 		required this.order,
@@ -26,6 +29,7 @@ class ManifestMediaItem {
 		required this.downloadUrl,
 		this.layoutWidth = 0,
 		this.layoutHeight = 0,
+		this.orientation = 'landscape',
 	});
 
 	factory ManifestMediaItem.fromJson(Map<String, dynamic> json) {
@@ -42,6 +46,26 @@ class ManifestMediaItem {
 			downloadUrl: json['downloadUrl'] as String? ?? '',
 			layoutWidth: (json['layoutWidth'] as num?)?.toInt() ?? 0,
 			layoutHeight: (json['layoutHeight'] as num?)?.toInt() ?? 0,
+			orientation: json['orientation'] as String? ?? 'landscape',
+		);
+	}
+}
+
+/// Parsed representation of the `secondary_display` block in the manifest.
+/// Only present for PHOENIX (dual-zone) devices.
+class SecondaryDisplay {
+	final bool enabled;
+	final List<ManifestMediaItem> media;
+
+	const SecondaryDisplay({required this.enabled, required this.media});
+
+	factory SecondaryDisplay.fromJson(Map<String, dynamic> json) {
+		final mediaJson = json['media'] as List<dynamic>? ?? [];
+		return SecondaryDisplay(
+			enabled: json['enabled'] as bool? ?? false,
+			media: mediaJson
+				.map((e) => ManifestMediaItem.fromJson(e as Map<String, dynamic>))
+				.toList(),
 		);
 	}
 }
@@ -58,6 +82,8 @@ class PlayerManifest {
 	final int zoneCount;
 	final Map<String, dynamic>? schedule;
 	final List<ManifestMediaItem> media;
+	/// Secondary display content for PHOENIX devices. Null for all other device types.
+	final SecondaryDisplay? secondaryDisplay;
 
 	const PlayerManifest({
 		this.displayId,
@@ -69,11 +95,13 @@ class PlayerManifest {
 		this.zoneCount = 1,
 		this.schedule,
 		required this.media,
+		this.secondaryDisplay,
 	});
 
 	factory PlayerManifest.fromJson(Map<String, dynamic> json) {
 		final data = json['data'] as Map<String, dynamic>? ?? json;
 		final mediaJson = data['media'] as List<dynamic>? ?? [];
+		final secondaryJson = data['secondary_display'] as Map<String, dynamic>?;
 		return PlayerManifest(
 			displayId: (data['displayId'] as num?)?.toInt(),
 			displayName: data['displayName'] as String? ?? '',
@@ -86,6 +114,9 @@ class PlayerManifest {
 			media: mediaJson
 				.map((e) => ManifestMediaItem.fromJson(e as Map<String, dynamic>))
 				.toList(),
+			secondaryDisplay: secondaryJson != null
+				? SecondaryDisplay.fromJson(secondaryJson)
+				: null,
 		);
 	}
 }

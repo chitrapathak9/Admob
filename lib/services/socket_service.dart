@@ -308,6 +308,11 @@ class SocketService {
     _socket?.on(event, handler);
   }
 
+  void emit(String event, dynamic data) {
+    _socket?.emit(event, data);
+    AppLogger.socketEmit(event, data);
+  }
+
   void off(String event, [Function(dynamic)? handler]) {
     if (handler != null) {
       _socket?.off(event, handler);
@@ -330,6 +335,9 @@ enum SocketEvent {
   reconnected,
   screenshotRequested,
   deviceNotRegistered,
+  /// Fired by [DisplayManagerService] when a physical display is connected or
+  /// disconnected. Payload is the updated `List<Display>` from the OS.
+  displayChanged,
 }
 
 class SocketEventBus {

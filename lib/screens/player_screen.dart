@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../config/app_config.dart';
 import '../models/play_item.dart';
 import '../models/player_manifest.dart';
+import '../services/display_manager_service.dart';
 import '../services/download_service.dart';
 import '../services/heartbeat_service.dart';
 import '../services/player_service.dart';
@@ -46,6 +47,10 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   int _mediaTotal = 0;
   int _mediaReady = 0;
   int _zoneCount = 1;
+
+  // ── Secondary display (PHOENIX dual-zone via HDMI) ────────────────────────
+  List<ManifestMediaItem> _secondaryMedia = [];
+  bool _secondaryDisplayActive = false;
 
   bool _isLoading = true;
   String _loadingMessage = 'Connecting to server...';
@@ -94,6 +99,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     bus.on(SocketEvent.schedulePaused, _handleSocketScheduleChange);
     bus.on(SocketEvent.reconnected, _handleSocketContentChange);
     bus.on(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
+    bus.on(SocketEvent.displayChanged, _handleDisplayChanged);
   }
 
   void _handleDeviceNotRegistered(dynamic _) {
@@ -109,6 +115,33 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   void _handleSocketScheduleChange(dynamic _) {
     if (!mounted) return;
     _refreshManifest();
+  }
+
+  void _handleDisplayChanged(dynamic _) {
+    if (!mounted) return;
+    final dm = DisplayManagerService.instance;
+    if (!dm.hasSecondaryDisplay && _secondaryDisplayActive) {
+      // HDMI physically disconnected — fall back to mirrored two-half view.
+      setState(() => _secondaryDisplayActive = false);
+      return;
+    }
+    if (dm.hasSecondaryDisplay && !_secondaryDisplayActive && _secondaryMedia.isNotEmpty) {
+      // HDMI reconnected and we have cached secondary media — re-launch.
+      unawaited(_launchAndPushSecondary(_secondaryMedia));
+    }
+  }
+
+  Future<void> _launchAndPushSecondary(List<ManifestMediaItem> media) async {
+    final dm = DisplayManagerService.instance;
+    final launched = await dm.launchSecondaryScreen();
+    if (!launched || !mounted) return;
+    await dm.pushMediaToSecondary(media);
+    if (media.isNotEmpty) {
+      await dm.pushOrientationToSecondary(
+        isPortrait: media.first.orientation == 'portrait',
+      );
+    }
+    if (mounted) setState(() => _secondaryDisplayActive = true);
   }
 
   Future<void> _bootstrap() async {
@@ -154,6 +187,20 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       setState(() => _loadingMessage = 'Downloading media assets. Playback will begin shortly...');
 
       await DownloadService.instance.downloadManifestMedia(manifest.media);
+
+      // Initialize display manager — needed for display-count socket responses
+      // on all device types, and for secondary display launch on PHOENIX.
+      await DisplayManagerService.instance.initialize();
+
+      // Download secondary media for PHOENIX devices with a campaign assigned.
+      final secondaryMedia = (manifest.secondaryDisplay?.enabled ?? false)
+          ? manifest.secondaryDisplay!.media
+          : <ManifestMediaItem>[];
+      if (secondaryMedia.isNotEmpty) {
+        await DownloadService.instance.downloadManifestMedia(secondaryMedia);
+        _secondaryMedia = secondaryMedia;
+      }
+
       final playlist = await _buildPlaylistFromManifest(manifest);
       _mediaReady = playlist.length;
 
@@ -168,6 +215,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         });
         _startAutoRetry();
         return false;
+      }
+
+      // Launch secondary engine if HDMI is already connected at boot.
+      // Runs concurrently — primary UI starts immediately without waiting.
+      if (_secondaryMedia.isNotEmpty && DisplayManagerService.instance.hasSecondaryDisplay) {
+        unawaited(_launchAndPushSecondary(_secondaryMedia));
       }
 
       if (!mounted) return false;
@@ -352,6 +405,32 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       }
 
       await DownloadService.instance.downloadManifestMedia(manifest.media);
+
+      // Handle secondary display media refresh.
+      final secondary = manifest.secondaryDisplay;
+      if (secondary != null && secondary.enabled && secondary.media.isNotEmpty) {
+        await DownloadService.instance.downloadManifestMedia(secondary.media);
+        _secondaryMedia = secondary.media;
+        final dm = DisplayManagerService.instance;
+        if (dm.secondaryActive) {
+          // Engine already running — push updated playlist without restarting it.
+          await dm.pushMediaToSecondary(_secondaryMedia);
+          if (_secondaryMedia.isNotEmpty) {
+            await dm.pushOrientationToSecondary(
+              isPortrait: _secondaryMedia.first.orientation == 'portrait',
+            );
+          }
+        } else if (dm.hasSecondaryDisplay) {
+          // HDMI connected but engine not yet started (e.g. app resumed after kill).
+          unawaited(_launchAndPushSecondary(_secondaryMedia));
+        }
+      } else if (_secondaryMedia.isNotEmpty) {
+        // Secondary campaign was removed — clear and dismiss engine.
+        _secondaryMedia = [];
+        await DisplayManagerService.instance.dismissSecondary();
+        if (mounted) setState(() => _secondaryDisplayActive = false);
+      }
+
       // Layer 1 (threshold) + Layer 2 (campaign end) — contentChanged when hash differs.
       StorageCleanupService.instance.onManifestUpdated(
         manifest,
@@ -504,6 +583,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     bus.off(SocketEvent.schedulePaused, _handleSocketScheduleChange);
     bus.off(SocketEvent.reconnected, _handleSocketContentChange);
     bus.off(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
+    bus.off(SocketEvent.displayChanged, _handleDisplayChanged);
+    unawaited(DisplayManagerService.instance.dismissSecondary());
     _stopHeartbeat();
     _retryTimer?.cancel();
     _noContentTimer?.cancel();
@@ -744,10 +825,11 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   Widget _buildPlayerUi() {
     final item = _playlist[_currentIndex % _playlist.length];
 
-    // PHOENIX (and any future dual-panel type): render the same slide in two
-    // equal halves so the content fills both physical screens simultaneously.
-    // The top half advances the playlist; the bottom half mirrors passively.
-    if (_zoneCount >= 2) {
+    // PHOENIX fallback — no HDMI connected: render the same slide in two equal
+    // halves so content fills both physical panels simultaneously.
+    // When HDMI is active, the secondary engine handles panel 2 independently
+    // via DisplayManagerService, so the primary renders full-screen here.
+    if (_zoneCount >= 2 && !_secondaryDisplayActive) {
       return Scaffold(
         backgroundColor: AppConfig.background,
         body: Stack(
