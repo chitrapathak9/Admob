@@ -132,9 +132,13 @@ class DisplayManagerService {
     try {
       final payload = media
           .map((m) => {
+                'order'      : m.order,
+                'name'       : m.name,
                 'filename'   : m.filename,
+                'downloadUrl': m.downloadUrl,
                 'type'       : m.type,
                 'duration'   : m.duration,
+                'fileSize'   : m.fileSize,
                 'orientation': m.orientation,
               })
           .toList();
@@ -143,6 +147,9 @@ class DisplayManagerService {
         'mediaJson': jsonEncode(payload),
       });
       debugPrint('[DisplayManager] pushed ${media.length} item(s) to secondary');
+      for (final m in media) {
+        debugPrint('[DisplayManager]   ‣ ${m.name} | ${m.type} | ${m.orientation} | file=${m.filename}');
+      }
     } catch (e) {
       debugPrint('[DisplayManager] pushMediaToSecondary error: $e');
     }

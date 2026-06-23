@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_presentation_display/flutter_presentation_display.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:video_player/video_player.dart';
 
 import '../widgets/image_slide.dart';
 import '../widgets/video_slide.dart';
@@ -15,10 +16,26 @@ import '../widgets/video_slide.dart';
 /// Runs in its own Flutter engine and Dart isolate — shares the on-disk
 /// media cache with the primary engine but has no shared in-memory state.
 ///
-/// Receives two messages from the primary engine via
-/// [FlutterPresentationDisplay.listenDataFromMainDisplay]:
-///   { action: 'setMedia',       mediaJson: `<json string>` }
-///   { action: 'setOrientation', isPortrait: bool }
+/// # Orientation handling
+///
+/// Primary and secondary screens can have completely different physical
+/// orientations (e.g. primary = portrait, secondary = landscape).
+/// Each media item carries its own `isPortraitContent` flag (derived from
+/// the `orientation` field in the manifest JSON).  The [_OrientationWrapper]
+/// is applied **per slide**, not around the entire player, so a playlist that
+/// mixes portrait and landscape content is handled correctly with zero race
+/// conditions.
+///
+/// Resolution of each item:
+///   1. Local file at `<appDocDir>/media/<filename>` (normal cached flow).
+///   2. `downloadUrl` streamed over the network (mock / test items, or
+///      content not yet downloaded on the secondary engine).
+///
+/// Supported messages from the primary engine:
+///   { action: 'setMedia', mediaJson: '<json string>' }
+///
+/// The `setOrientation` message is **no longer used** — orientation is now
+/// embedded per item in the mediaJson so there are no race conditions.
 class SecondaryPlayerApp extends StatefulWidget {
   const SecondaryPlayerApp({super.key});
 
@@ -33,10 +50,6 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
   int _currentIndex = 0;
   int _slideKey = 0;
 
-  /// True when the mastered content is portrait (9:16).
-  /// False (default) means landscape (16:9).
-  bool _isPortraitContent = false;
-
   @override
   void initState() {
     super.initState();
@@ -49,54 +62,83 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
 
     switch (msg['action'] as String?) {
       case 'setMedia':
-        // unawaited — errors are caught inside _handleSetMedia
         _handleSetMedia(msg['mediaJson'] as String? ?? '').catchError((Object e) {
           debugPrint('[Secondary] setMedia unhandled error: $e');
         });
+
+      // setOrientation is kept for backward compatibility but orientation is
+      // now embedded per-item in setMedia — this branch is a no-op.
       case 'setOrientation':
-        if (!mounted) return;
-        setState(() {
-          _isPortraitContent = (msg['isPortrait'] as bool?) ?? false;
-        });
+        debugPrint('[Secondary] setOrientation received (ignored — orientation is per-item)');
     }
   }
 
   Future<void> _handleSetMedia(String mediaJson) async {
     if (mediaJson.isEmpty) return;
     try {
-      final rawList = jsonDecode(mediaJson) as List<dynamic>;
-      final appDir = await getApplicationDocumentsDirectory();
+      final rawList  = jsonDecode(mediaJson) as List<dynamic>;
+      final appDir   = await getApplicationDocumentsDirectory();
       final mediaDir = '${appDir.path}/media';
 
       final entries = <_MediaEntry>[];
       for (final raw in rawList) {
-        final m = Map<String, dynamic>.from(raw as Map);
-        final filename = m['filename'] as String? ?? '';
-        if (filename.isEmpty) continue;
+        final m           = Map<String, dynamic>.from(raw as Map);
+        final filename    = m['filename']    as String? ?? '';
+        final downloadUrl = m['downloadUrl'] as String? ?? '';
+        final type        = m['type']        as String? ?? 'image';
+        final duration    = (m['duration']   as num?)?.toInt() ?? 10;
 
-        final path = '$mediaDir/$filename';
-        if (!await File(path).exists()) {
-          debugPrint('[Secondary] file not on disk, skipping: $filename');
+        // ── Orientation: embedded per-item ───────────────────────────────
+        // 'portrait' | 'landscape' — defaults to landscape when absent.
+        // The secondary screen reads its OWN physical orientation from
+        // MediaQuery at render time and rotates content if needed.
+        final isPortraitContent =
+            (m['orientation'] as String? ?? 'landscape') == 'portrait';
+
+        // ── Priority 1: local file on disk ───────────────────────────────
+        if (filename.isNotEmpty) {
+          final path = '$mediaDir/$filename';
+          if (await File(path).exists()) {
+            entries.add(_MediaEntry(
+              source           : path,
+              type             : type,
+              duration         : duration,
+              isNetwork        : false,
+              isPortraitContent: isPortraitContent,
+            ));
+            continue;
+          }
+          debugPrint('[Secondary] file not on disk: $filename');
+        }
+
+        // ── Priority 2: stream directly from downloadUrl ─────────────────
+        // Used for mock/test items (e.g. Cloudinary) or content not yet
+        // cached by the primary download service.
+        if (downloadUrl.isNotEmpty) {
+          debugPrint('[Secondary] network fallback: $downloadUrl');
+          entries.add(_MediaEntry(
+            source           : downloadUrl,
+            type             : type,
+            duration         : duration,
+            isNetwork        : true,
+            isPortraitContent: isPortraitContent,
+          ));
           continue;
         }
 
-        entries.add(_MediaEntry(
-          localPath: path,
-          type: m['type'] as String? ?? 'image',
-          duration: (m['duration'] as num?)?.toInt() ?? 10,
-        ));
+        debugPrint('[Secondary] skipping — no local file or download URL');
       }
 
-      // If no files resolved (e.g. HDMI reconnect before download completes),
-      // keep the current playlist playing rather than going black.
+      // Keep current playlist playing rather than going black if nothing resolved
+      // (e.g. HDMI reconnect before download completes).
       if (entries.isEmpty) {
-        debugPrint('[Secondary] setMedia: no files ready on disk — keeping current playlist');
+        debugPrint('[Secondary] setMedia: nothing ready — keeping current playlist');
         return;
       }
 
       if (!mounted) return;
       setState(() {
-        _playlist = entries;
+        _playlist     = entries;
         _currentIndex = 0;
         _slideKey++;
       });
@@ -117,21 +159,32 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
 
   @override
   Widget build(BuildContext context) {
+    if (_playlist.isEmpty) {
+      return const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          backgroundColor: Colors.black,
+          body: SizedBox.expand(child: ColoredBox(color: Colors.black)),
+        ),
+      );
+    }
+
+    final entry = _playlist[_currentIndex % _playlist.length];
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         backgroundColor: Colors.black,
-        body: _playlist.isEmpty
-            ? const SizedBox.expand(child: ColoredBox(color: Colors.black))
-            : _OrientationWrapper(
-                isPortraitContent: _isPortraitContent,
-                child: KeyedSubtree(
-                  key: ValueKey<int>(_slideKey),
-                  child: _buildSlide(
-                    _playlist[_currentIndex % _playlist.length],
-                  ),
-                ),
-              ),
+        // _OrientationWrapper is applied PER SLIDE so each item uses its
+        // own content orientation vs the secondary screen's physical
+        // orientation, read fresh from MediaQuery on every rebuild.
+        body: _OrientationWrapper(
+          isPortraitContent: entry.isPortraitContent,
+          child: KeyedSubtree(
+            key: ValueKey<int>(_slideKey),
+            child: _buildSlide(entry),
+          ),
+        ),
       ),
     );
   }
@@ -140,17 +193,31 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
 
   Widget _buildSlide(_MediaEntry entry) {
     final isVideo = entry.type == 'video' ||
-        _videoExtensions.any(entry.localPath.toLowerCase().endsWith);
+        _videoExtensions.any(entry.source.toLowerCase().endsWith);
+
+    if (entry.isNetwork) {
+      return isVideo
+          ? _NetworkVideoSlide(
+              url       : entry.source,
+              duration  : entry.duration,
+              onComplete: _onItemComplete,
+            )
+          : _NetworkImageSlide(
+              url       : entry.source,
+              duration  : entry.duration,
+              onComplete: _onItemComplete,
+            );
+    }
 
     return isVideo
         ? VideoSlide(
-            localPath: entry.localPath,
-            duration: entry.duration,
+            localPath : entry.source,
+            duration  : entry.duration,
             onComplete: _onItemComplete,
           )
         : ImageSlide(
-            localPath: entry.localPath,
-            duration: entry.duration,
+            localPath : entry.source,
+            duration  : entry.duration,
             onComplete: _onItemComplete,
           );
   }
@@ -160,48 +227,186 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
 
 class _MediaEntry {
   const _MediaEntry({
-    required this.localPath,
+    required this.source,
     required this.type,
     required this.duration,
+    required this.isNetwork,
+    required this.isPortraitContent,
   });
 
-  final String localPath;
+  /// Absolute file path (isNetwork=false) or HTTPS URL (isNetwork=true).
+  final String source;
   final String type;
-  final int duration;
+  final int    duration;
+
+  /// True when this item must be fetched over the network instead of from disk.
+  final bool isNetwork;
+
+  /// True when the content was mastered in portrait (9:16) aspect ratio.
+  /// Derived from the `orientation` field in the manifest JSON.
+  /// The [_OrientationWrapper] uses this to rotate when the secondary
+  /// screen's physical orientation differs.
+  final bool isPortraitContent;
 }
 
-// ── Orientation mismatch handler ──────────────────────────────────────────────
+// ── Network image slide ───────────────────────────────────────────────────────
 
-/// Rotates [child] 90° when the mastered content orientation does not match
-/// the physical screen orientation, then sizes it to fill the screen.
+class _NetworkImageSlide extends StatefulWidget {
+  const _NetworkImageSlide({
+    required this.url,
+    required this.duration,
+    required this.onComplete,
+  });
+
+  final String       url;
+  final int          duration;
+  final VoidCallback onComplete;
+
+  @override
+  State<_NetworkImageSlide> createState() => _NetworkImageSlideState();
+}
+
+class _NetworkImageSlideState extends State<_NetworkImageSlide> {
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(Duration(seconds: widget.duration), () {
+      if (mounted) widget.onComplete();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Colors.black,
+      child: Image.network(
+        widget.url,
+        fit   : BoxFit.contain,
+        width : double.infinity,
+        height: double.infinity,
+        loadingBuilder: (_, child, progress) => progress == null
+            ? child
+            : const Center(child: CircularProgressIndicator(color: Colors.white)),
+        errorBuilder: (_, __, ___) {
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => widget.onComplete(),
+          );
+          return const SizedBox.shrink();
+        },
+      ),
+    );
+  }
+}
+
+// ── Network video slide ───────────────────────────────────────────────────────
+
+class _NetworkVideoSlide extends StatefulWidget {
+  const _NetworkVideoSlide({
+    required this.url,
+    required this.duration,
+    required this.onComplete,
+  });
+
+  final String       url;
+  final int          duration;
+  final VoidCallback onComplete;
+
+  @override
+  State<_NetworkVideoSlide> createState() => _NetworkVideoSlideState();
+}
+
+class _NetworkVideoSlideState extends State<_NetworkVideoSlide> {
+  late VideoPlayerController _controller;
+  bool _initialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.url))
+      ..initialize().then((_) {
+        if (!mounted) return;
+        setState(() => _initialized = true);
+        _controller
+          ..play()
+          ..addListener(_onVideoProgress);
+      }).catchError((Object e) {
+        debugPrint('[Secondary] network video init failed: $e');
+        if (mounted) widget.onComplete();
+      });
+  }
+
+  void _onVideoProgress() {
+    if (!_controller.value.isInitialized) return;
+    if (!_controller.value.isPlaying &&
+        _controller.value.position >= _controller.value.duration) {
+      widget.onComplete();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onVideoProgress);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_initialized) {
+      return const Center(child: CircularProgressIndicator(color: Colors.white));
+    }
+    return ColoredBox(
+      color: Colors.black,
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: _controller.value.aspectRatio,
+          child: VideoPlayer(_controller),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Per-slide orientation adapter ─────────────────────────────────────────────
+
+/// Rotates [child] 90° when the media's mastered content orientation does not
+/// match the **secondary screen's** physical orientation (read independently
+/// from [MediaQuery] of this Flutter engine — completely separate from the
+/// primary screen's orientation lock).
+///
+/// Applied per-slide so mixed-orientation playlists are handled correctly.
 ///
 /// Examples:
-///   Portrait content on landscape screen  → quarterTurns: 1
-///   Landscape content on portrait screen  → quarterTurns: 3
+///   Content portrait  + screen landscape → RotatedBox(quarterTurns: 1)
+///   Content landscape + screen portrait  → RotatedBox(quarterTurns: 3)
+///   Orientations match                   → no rotation, rendered as-is
 class _OrientationWrapper extends StatelessWidget {
   const _OrientationWrapper({
     required this.isPortraitContent,
     required this.child,
   });
 
-  final bool isPortraitContent;
+  final bool   isPortraitContent;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
+    // Read from the SECONDARY screen's MediaQuery — this is a separate Flutter
+    // engine and does NOT share SystemChrome orientation locks with the primary.
     final screenIsPortrait =
         MediaQuery.of(context).orientation == Orientation.portrait;
 
-    // Content and screen orientations match — render as-is.
+    // Orientations match — render content as-is with BoxFit.contain in slides.
     if (isPortraitContent == screenIsPortrait) return child;
 
-    // Rotate 90° and swap width/height so the content fills the screen.
+    // Mismatch: rotate 90° and swap the logical width/height so the content
+    // fills the screen without black bars on the wrong axis.
     return RotatedBox(
       quarterTurns: isPortraitContent ? 1 : 3,
       child: SizedBox(
-        width: MediaQuery.of(context).size.height,
+        width : MediaQuery.of(context).size.height,
         height: MediaQuery.of(context).size.width,
-        child: child,
+        child : child,
       ),
     );
   }

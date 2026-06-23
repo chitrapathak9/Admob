@@ -57,7 +57,9 @@ class DownloadService {
 	Future<bool> manifestFileExists(String filename, String expectedMd5) async {
 		final path = await getMediaLocalPath(filename);
 		final file = File(path);
+		// Always verify the file exists on disk first.
 		if (!await file.exists()) return false;
+		// Skip content-hash check when md5 is empty (server didn't supply one).
 		if (expectedMd5.isEmpty) return true;
 		final bytes = await file.readAsBytes();
 		final digest = md5.convert(bytes).toString();

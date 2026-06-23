@@ -135,12 +135,10 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     final dm = DisplayManagerService.instance;
     final launched = await dm.launchSecondaryScreen();
     if (!launched || !mounted) return;
+    // Orientation is now embedded per-item in the media payload — no separate
+    // pushOrientationToSecondary needed. Each slide reads its own orientation
+    // and compares it to the secondary screen's MediaQuery independently.
     await dm.pushMediaToSecondary(media);
-    if (media.isNotEmpty) {
-      await dm.pushOrientationToSecondary(
-        isPortrait: media.first.orientation == 'portrait',
-      );
-    }
     if (mounted) setState(() => _secondaryDisplayActive = true);
   }
 
@@ -414,12 +412,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         final dm = DisplayManagerService.instance;
         if (dm.secondaryActive) {
           // Engine already running — push updated playlist without restarting it.
+          // Orientation is embedded per-item in pushMediaToSecondary payload.
           await dm.pushMediaToSecondary(_secondaryMedia);
-          if (_secondaryMedia.isNotEmpty) {
-            await dm.pushOrientationToSecondary(
-              isPortrait: _secondaryMedia.first.orientation == 'portrait',
-            );
-          }
         } else if (dm.hasSecondaryDisplay) {
           // HDMI connected but engine not yet started (e.g. app resumed after kill).
           unawaited(_launchAndPushSecondary(_secondaryMedia));
@@ -479,11 +473,26 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
 
   /// Detects the intended orientation from [playlist] and locks the device to it.
   ///
-  /// Priority:
+  /// ⚠️ Dual-screen guard: when a secondary display is active we intentionally
+  /// skip the orientation lock.  [SystemChrome.setPreferredOrientations] sets
+  /// `Activity.setRequestedOrientation` on Android, which can clip or rotate
+  /// the secondary Android Presentation display.  The secondary screen runs in
+  /// its own Flutter engine and resolves orientation independently per-slide
+  /// via [MediaQuery] — it must not be affected by the primary screen's lock.
+  ///
+  /// Priority (single-screen only):
   ///   1. layoutWidth/layoutHeight carried on the PlayItem (from manifest JSON).
   ///   2. Dimensions parsed from the cached XLF file for each layoutId.
   ///   3. Free rotation (no lock) when orientation cannot be determined.
   Future<void> _applyOrientationPreference(List<PlayItem> playlist) async {
+    // Skip orientation lock entirely when secondary display is active.
+    if (_secondaryDisplayActive || DisplayManagerService.instance.hasSecondaryDisplay) {
+      debugPrint('[Player] Dual-screen active — skipping orientation lock to protect secondary display');
+      // Ensure free rotation so primary content still fills its own screen.
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      return;
+    }
+
     if (playlist.isEmpty) {
       await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
       return;
