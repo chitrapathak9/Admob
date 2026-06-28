@@ -10,6 +10,7 @@ import '../services/storage_service.dart';
 import '../utils/app_logger.dart';
 import '../utils/device_name.dart';
 import '../widgets/adaptive_padding.dart';
+import '../widgets/device_info_bottom_sheet.dart';
 import '../widgets/theadbook_logo.dart';
 import 'player_screen.dart';
 import 'setup_screen.dart';
@@ -22,7 +23,7 @@ class WaitingScreen extends StatefulWidget {
 }
 
 class _WaitingScreenState extends State<WaitingScreen> {
-	static const _connectedTitle = 'Device Registered Successfully';
+	static const _connectedTitle = 'Device Connected With Server';
 	static const _connectedMessage = 
 		'This display is pending administrator approval.\n'
 		'Playback will begin automatically once authorized in the CMS.';
@@ -255,6 +256,10 @@ class _WaitingScreenState extends State<WaitingScreen> {
 		super.dispose();
 	}
 
+	void _showDeviceInfo() {
+		showDeviceInfoBottomSheet(context, onReconfigure: _reconfigure);
+	}
+
 	@override
 	Widget build(BuildContext context) {
 		final padding = adaptiveScreenPadding(context);
@@ -264,67 +269,104 @@ class _WaitingScreenState extends State<WaitingScreen> {
 		final beforeId = adaptiveGap(context, portrait: 32, landscape: 12);
 		final beforeButton = adaptiveGap(context, portrait: 48, landscape: 16);
 
-		return Scaffold(
-			backgroundColor: AppConfig.background,
-			body: SafeArea(
-				child: Center(
-					child: SingleChildScrollView(
-						padding: padding,
-						child: ConstrainedBox(
-							constraints: const BoxConstraints(maxWidth: 520),
-							child: Column(
-								mainAxisAlignment: MainAxisAlignment.center,
-								children: [
-									TheadbookLogo(height: logoHeight),
-									SizedBox(height: afterLogo),
-									const CircularProgressIndicator(color: AppConfig.accentOrange),
-									SizedBox(height: afterSpinner),
-									Text(
-										_title,
-										style: const TextStyle(
-											color: Colors.white,
-											fontSize: 20,
-											fontWeight: FontWeight.bold,
+		return PopScope(
+			canPop: false,
+			onPopInvokedWithResult: (didPop, _) {
+				if (didPop) return;
+				_showDeviceInfo();
+			},
+			child: Scaffold(
+				backgroundColor: AppConfig.background,
+				body: SafeArea(
+					child: Stack(
+						children: [
+							Center(
+								child: SingleChildScrollView(
+									padding: padding,
+									child: ConstrainedBox(
+										constraints: const BoxConstraints(maxWidth: 520),
+										child: Column(
+											mainAxisAlignment: MainAxisAlignment.center,
+											children: [
+												TheadbookLogo(height: logoHeight),
+												SizedBox(height: afterLogo),
+												const CircularProgressIndicator(color: AppConfig.accentOrange),
+												SizedBox(height: afterSpinner),
+												Text(
+													_title,
+													style: const TextStyle(
+														color: Colors.white,
+														fontSize: 20,
+														fontWeight: FontWeight.bold,
+													),
+													textAlign: TextAlign.center,
+												),
+												const SizedBox(height: 12),
+												Text(
+													_message,
+													style: const TextStyle(color: Colors.white54, fontSize: 14),
+													textAlign: TextAlign.center,
+												),
+												SizedBox(height: beforeId),
+												const Text(
+													'Display ID',
+													style: TextStyle(color: Colors.white54, fontSize: 14),
+												),
+												const SizedBox(height: 8),
+												SelectableText(
+													_hardwareKey,
+													style: TextStyle(
+														color: AppConfig.accentOrange,
+														fontSize: MediaQuery.sizeOf(context).width < 360 ? 14 : 18,
+														fontWeight: FontWeight.bold,
+														letterSpacing: 1,
+													),
+													textAlign: TextAlign.center,
+												),
+												if (_error != null) ...[
+													const SizedBox(height: 16),
+													Text(_error!, style: const TextStyle(color: Colors.white38), textAlign: TextAlign.center),
+												],
+												SizedBox(height: beforeButton),
+												TextButton(
+													onPressed: _reconfigure,
+													child: const Text('Reconfigure Device', style: TextStyle(color: Colors.white54)),
+												),
+											],
 										),
-										textAlign: TextAlign.center,
 									),
-									const SizedBox(height: 12),
-									Text(
-										_message,
-										style: const TextStyle(color: Colors.white54, fontSize: 14),
-										textAlign: TextAlign.center,
-									),
-									SizedBox(height: beforeId),
-									const Text(
-										'Display ID',
-										style: TextStyle(color: Colors.white54, fontSize: 14),
-									),
-									const SizedBox(height: 8),
-									SelectableText(
-										_hardwareKey,
-										style: TextStyle(
-											color: AppConfig.accentOrange,
-											fontSize: MediaQuery.sizeOf(context).width < 360 ? 14 : 18,
-											fontWeight: FontWeight.bold,
-											letterSpacing: 1,
-										),
-										textAlign: TextAlign.center,
-									),
-									if (_error != null) ...[
-										const SizedBox(height: 16),
-										Text(_error!, style: const TextStyle(color: Colors.white38), textAlign: TextAlign.center),
-									],
-									SizedBox(height: beforeButton),
-									TextButton(
-										onPressed: _reconfigure,
-										child: const Text('Reconfigure Device', style: TextStyle(color: Colors.white54)),
-									),
-								],
+								),
 							),
-						),
+							_buildSocketConnectionIndicator(),
+						],
 					),
 				),
 			),
+		);
+	}
+
+	Widget _buildSocketConnectionIndicator() {
+		return StreamBuilder<bool>(
+			stream: SocketService.instance.connectionStream,
+			initialData: SocketService.instance.isConnected,
+			builder: (context, snapshot) {
+				final connected = snapshot.data ?? false;
+				return Positioned(
+					top: 8,
+					right: 8,
+					child: GestureDetector(
+						onTap: _showDeviceInfo,
+						child: Container(
+							width: 16,
+							height: 16,
+							decoration: BoxDecoration(
+								shape: BoxShape.circle,
+								color: connected ? Colors.green : Colors.red,
+							),
+						),
+					),
+				);
+			},
 		);
 	}
 }

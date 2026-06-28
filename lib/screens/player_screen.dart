@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -21,6 +20,7 @@ import '../services/xmr_service.dart';
 import '../utils/app_logger.dart';
 import '../services/xlf_parser.dart';
 import '../widgets/adaptive_padding.dart';
+import '../widgets/device_info_bottom_sheet.dart';
 import '../widgets/image_slide.dart';
 import '../widgets/theadbook_logo.dart';
 import '../widgets/video_slide.dart';
@@ -540,12 +540,15 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         return Positioned(
           top: 8,
           right: 8,
-          child: Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: connected ? Colors.green : Colors.red,
+          child: GestureDetector(
+            onTap: _showDeviceInfo,
+            child: Container(
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: connected ? Colors.green : Colors.red,
+              ),
             ),
           ),
         );
@@ -606,13 +609,17 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     super.dispose();
   }
 
+  void _showDeviceInfo() {
+    showDeviceInfoBottomSheet(context, onReconfigure: _goToConnectScreen);
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        unawaited(_goToConnectScreen());
+        _showDeviceInfo();
       },
       child: _buildBody(),
     );
@@ -852,7 +859,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
                 ],
               ),
             ),
-            if (kDebugMode) _buildSocketConnectionIndicator(),
+            _buildSocketConnectionIndicator(),
           ],
         ),
       );
@@ -866,7 +873,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
             key: ValueKey<int>(_slideKey),
             child: _buildSlide(item),
           ),
-          if (kDebugMode) _buildSocketConnectionIndicator(),
+          _buildSocketConnectionIndicator(),
         ],
       ),
     );
