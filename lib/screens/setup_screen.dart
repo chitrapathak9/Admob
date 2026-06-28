@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../config/app_config.dart';
@@ -79,11 +82,19 @@ class _SetupScreenState extends State<SetupScreen> {
 		final apiUrl = _apiUrlController.text.trim();
 
 		if (screenName.isEmpty) {
-			setState(() => _error = 'Please enter a screen name');
+			setState(() => _error = 'Please enter a display name.');
+			return;
+		}
+		if (screenName.length < 2) {
+			setState(() => _error = 'Display name must be at least 2 characters.');
 			return;
 		}
 		if (apiUrl.isEmpty) {
-			setState(() => _error = 'Please enter a server address');
+			setState(() => _error = 'Please enter a server address.');
+			return;
+		}
+		if (!_isValidServerUrl(apiUrl)) {
+			setState(() => _error = 'Please enter a valid server URL (e.g. https://your-server.com).');
 			return;
 		}
 
@@ -137,11 +148,87 @@ class _SetupScreenState extends State<SetupScreen> {
 			AppLogger.setupError('Registration flow failed', e, st);
 			if (mounted) {
 				setState(() {
-					_error = e.toString().replaceFirst('Exception: ', '');
+					_error = _humanReadableError(e);
 					_loading = false;
 				});
 			}
 		}
+	}
+
+	/// Maps raw exceptions to user-friendly error messages so the registration
+	/// screen never shows a DioException / SocketException stack trace.
+	String _humanReadableError(Object error) {
+		if (error is DioException) {
+			switch (error.type) {
+				case DioExceptionType.connectionTimeout:
+				case DioExceptionType.sendTimeout:
+					return 'Connection timed out. Please check your internet connection and server address.';
+				case DioExceptionType.receiveTimeout:
+					return 'Server took too long to respond. Please try again.';
+				case DioExceptionType.connectionError:
+					final inner = error.error;
+					if (inner is SocketException) {
+						return _socketMessage(inner);
+					}
+					return 'Unable to reach the server. Please check your internet connection and server address.';
+				case DioExceptionType.badResponse:
+					final code = error.response?.statusCode;
+					if (code == 404) {
+						return 'Server endpoint not found (404). Please verify the server address.';
+					}
+					if (code == 500 || code == 502 || code == 503) {
+						return 'Server error ($code). Please try again later.';
+					}
+					return 'Server returned an unexpected response ($code).';
+				default:
+					break;
+			}
+			// Catch-all for DioException variants we didn't match explicitly.
+			final inner = error.error;
+			if (inner is SocketException) {
+				return _socketMessage(inner);
+			}
+			return error.message ?? 'Network error. Please check your connection.';
+		}
+
+		if (error is SocketException) {
+			return _socketMessage(error);
+		}
+
+		// Strip the leading "Exception: " prefix that Dart adds.
+		return error.toString().replaceFirst('Exception: ', '');
+	}
+
+	/// Validates that [url] looks like a usable http/https server address.
+	static bool _isValidServerUrl(String url) {
+		try {
+			final uri = Uri.parse(url);
+			if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+			if (uri.host.isEmpty) return false;
+			// Host must contain at least one dot (or be localhost / an IP).
+			if (!uri.host.contains('.') &&
+				uri.host != 'localhost' &&
+				!RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(uri.host)) {
+				return false;
+			}
+			return true;
+		} catch (_) {
+			return false;
+		}
+	}
+
+	static String _socketMessage(SocketException e) {
+		final msg = e.message.toLowerCase();
+		if (msg.contains('no route to host') ||
+			msg.contains('network is unreachable') ||
+			msg.contains('no address associated') ||
+			msg.contains('failed host lookup')) {
+			return 'No internet connection. Please check your network settings.';
+		}
+		if (msg.contains('connection refused')) {
+			return 'Server refused the connection. Please verify the server address and ensure it is running.';
+		}
+		return 'Unable to reach the server. Please check your internet connection and server address.';
 	}
 
 	@override

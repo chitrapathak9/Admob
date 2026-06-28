@@ -88,13 +88,25 @@ class XmrService {
 		}
 	}
 
+	/// Errors that indicate a fundamentally broken URL — reconnect will never
+	/// succeed until the config changes, so we stop trying.
 	bool _isPermanentFailure(Object? error) {
 		final errStr = error?.toString() ?? '';
-		return errStr.contains('not upgraded') ||
-			errStr.contains('404') ||
-			errStr.contains('403') ||
-			errStr.contains(':0/') ||
+		return errStr.contains(':0/') ||
 			errStr.contains('Invalid WebSocket URL');
+	}
+
+	/// HTTP 404/403 from the server can happen during rolling deploys or
+	/// restarts.  Rather than dying forever, we treat them as *transient* but
+	/// use a longer back-off so we don't hammer a server that is intentionally
+	/// rejecting us.
+	static const int _transientServerErrorBackoffSeconds = 300; // 5 min
+
+	bool _isTransientServerError(Object? error) {
+		final errStr = error?.toString() ?? '';
+		return errStr.contains('404') ||
+			errStr.contains('403') ||
+			errStr.contains('not upgraded');
 	}
 
 	void _handleFailure(Object? error, [StackTrace? stack]) {
@@ -111,6 +123,19 @@ class XmrService {
 				'cause=${error ?? "connection closed"}',
 			);
 			return;
+		}
+
+		if (_isTransientServerError(error)) {
+			// Use a longer ceiling so we don't flood the server, but do keep
+			// retrying so push commands resume once the server is back.
+			_backoffSeconds = _backoffSeconds.clamp(
+				_transientServerErrorBackoffSeconds,
+				_transientServerErrorBackoffSeconds,
+			);
+			AppLogger.xmr(
+				'Transient server error — will retry in ${_backoffSeconds}s. '
+				'cause=${error ?? "connection closed"}',
+			);
 		}
 
 		_scheduleReconnect();

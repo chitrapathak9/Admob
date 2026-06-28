@@ -132,14 +132,34 @@ class DownloadService {
 		}
 	}
 
-	Future<void> downloadManifestMedia(List<ManifestMediaItem> items) async {
-		for (final item in items) {
-			try {
-				await downloadManifestItem(item);
-			} catch (e) {
-				AppLogger.download('Skipping ${item.filename}: $e');
-			}
+	/// Downloads manifest media items with bounded parallelism.
+	/// [concurrency] controls how many files download simultaneously (default 3).
+	Future<void> downloadManifestMedia(
+		List<ManifestMediaItem> items, {
+		int concurrency = 3,
+	}) async {
+		if (items.isEmpty) return;
+
+		// Clamp to at least 1 and at most the number of items.
+		final poolSize = concurrency.clamp(1, items.length);
+
+		// Split items into [poolSize] buckets and run each bucket concurrently.
+		final buckets = List<List<ManifestMediaItem>>.generate(poolSize, (_) => []);
+		for (var i = 0; i < items.length; i++) {
+			buckets[i % poolSize].add(items[i]);
 		}
+
+		await Future.wait(
+			buckets.map((bucket) async {
+				for (final item in bucket) {
+					try {
+						await downloadManifestItem(item);
+					} catch (e) {
+						AppLogger.download('Skipping ${item.filename}: $e');
+					}
+				}
+			}),
+		);
 	}
 
 	Future<String> getLocalPath(String saveAs) async {
