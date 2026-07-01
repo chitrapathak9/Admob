@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_presentation_display/flutter_presentation_display.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
@@ -45,6 +48,7 @@ class SecondaryPlayerApp extends StatefulWidget {
 
 class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
   final FlutterPresentationDisplay _display = FlutterPresentationDisplay();
+  final GlobalKey _repaintKey = GlobalKey();
 
   List<_MediaEntry> _playlist = [];
   int _currentIndex = 0;
@@ -70,6 +74,60 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
       // now embedded per-item in setMedia — this branch is a no-op.
       case 'setOrientation':
         debugPrint('[Secondary] setOrientation received (ignored — orientation is per-item)');
+
+      case 'takeScreenshot':
+        final requestId = msg['requestId'] as String?;
+        _captureAndSendScreenshot(requestId).catchError((Object e) {
+          debugPrint('[Secondary] takeScreenshot unhandled error: $e');
+        });
+    }
+  }
+
+  Future<void> _captureAndSendScreenshot(String? requestId) async {
+    // Wait for the next frame so the current slide is fully painted.
+    await Future<void>.delayed(Duration.zero);
+
+    final boundary = _repaintKey.currentContext?.findRenderObject()
+        as RenderRepaintBoundary?;
+
+    if (boundary == null) {
+      await _display.transferDataToMain({
+        'action'   : 'screenshotError',
+        'requestId': requestId,
+        'error'    : 'RepaintBoundary not found',
+      });
+      return;
+    }
+
+    try {
+      final pixelRatio =
+          WidgetsBinding.instance.platformDispatcher.views.first.devicePixelRatio;
+      final image    = await boundary.toImage(pixelRatio: pixelRatio);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) throw Exception('toByteData returned null');
+
+      final pngBytes = byteData.buffer.asUint8List();
+      final appDir   = await getApplicationDocumentsDirectory();
+      final safeId   = requestId?.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_') ?? 'noId';
+      final filePath = '${appDir.path}/screenshots/secondary_ss_$safeId.png';
+
+      final file = File(filePath);
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(pngBytes);
+
+      debugPrint('[Secondary] screenshot saved: $filePath (${pngBytes.length} bytes)');
+      await _display.transferDataToMain({
+        'action'   : 'screenshotResult',
+        'requestId': requestId,
+        'filePath' : filePath,
+      });
+    } catch (e) {
+      debugPrint('[Secondary] screenshot capture error: $e');
+      await _display.transferDataToMain({
+        'action'   : 'screenshotError',
+        'requestId': requestId,
+        'error'    : e.toString(),
+      });
     }
   }
 
@@ -178,11 +236,14 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
         // _OrientationWrapper is applied PER SLIDE so each item uses its
         // own content orientation vs the secondary screen's physical
         // orientation, read fresh from MediaQuery on every rebuild.
-        body: _OrientationWrapper(
-          isPortraitContent: entry.isPortraitContent,
-          child: KeyedSubtree(
-            key: ValueKey<int>(_slideKey),
-            child: _buildSlide(entry),
+        body: RepaintBoundary(
+          key: _repaintKey,
+          child: _OrientationWrapper(
+            isPortraitContent: entry.isPortraitContent,
+            child: KeyedSubtree(
+              key: ValueKey<int>(_slideKey),
+              child: _buildSlide(entry),
+            ),
           ),
         ),
       ),

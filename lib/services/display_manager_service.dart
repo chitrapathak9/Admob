@@ -30,6 +30,9 @@ class DisplayManagerService {
   bool _secondaryActive = false;
   StreamSubscription<int?>? _displayChangeSubscription;
 
+  // Pending completers waiting for a screenshot result from the secondary engine.
+  final Map<String?, Completer<String>> _screenshotCompleters = {};
+
   /// Immutable snapshot of currently connected physical displays.
   List<Display> get connectedDisplays => List.unmodifiable(_connectedDisplays);
 
@@ -51,6 +54,55 @@ class DisplayManagerService {
   Future<void> initialize() async {
     await _refreshDisplayList();
     _subscribeToDisplayChanges();
+    // Listen for screenshot results (and errors) sent back from the secondary engine.
+    _display.listenDataFromPresentationDisplay(_onDataFromSecondary);
+  }
+
+  void _onDataFromSecondary(dynamic data) {
+    if (data is! Map) return;
+    final msg       = Map<String, dynamic>.from(data);
+    final action    = msg['action']    as String?;
+    final requestId = msg['requestId'] as String?;
+
+    if (action == 'screenshotResult') {
+      final filePath = msg['filePath'] as String?;
+      final completer = _screenshotCompleters.remove(requestId);
+      if (filePath != null && completer != null && !completer.isCompleted) {
+        completer.complete(filePath);
+      }
+    } else if (action == 'screenshotError') {
+      final error     = msg['error'] as String? ?? 'unknown error';
+      final completer = _screenshotCompleters.remove(requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.completeError(Exception('Secondary screenshot failed: $error'));
+      }
+    }
+  }
+
+  /// Request a screenshot from the secondary display engine.
+  ///
+  /// Returns the local file path of the captured PNG, or null on timeout/error.
+  Future<String?> requestSecondaryScreenshot(String? requestId) async {
+    if (!_secondaryActive) return null;
+
+    final completer = Completer<String>();
+    _screenshotCompleters[requestId] = completer;
+
+    try {
+      await _display.transferDataToPresentation({
+        'action'   : 'takeScreenshot',
+        'requestId': requestId,
+      });
+      return await completer.future.timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      _screenshotCompleters.remove(requestId);
+      debugPrint('[DisplayManager] Secondary screenshot timed out (requestId=$requestId)');
+      return null;
+    } catch (e) {
+      _screenshotCompleters.remove(requestId);
+      debugPrint('[DisplayManager] Secondary screenshot error: $e');
+      return null;
+    }
   }
 
   Future<void> _refreshDisplayList() async {

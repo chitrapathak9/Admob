@@ -151,11 +151,17 @@ class SocketEventHandler {
 
 	Future<void> _handleScreenshotEvent(String event, dynamic data) async {
 		final requestId = _readRequestId(data);
+		final displayTarget = data is Map
+			? (data['displayTarget'] as String? ?? 'primary')
+			: 'primary';
 		AppLogger.screenshotEvent(
-			'Step 1 — handling event="$event" requestId=${requestId ?? "(none)"}',
+			'Step 1 — handling event="$event" requestId=${requestId ?? "(none)"} displayTarget=$displayTarget',
 		);
 		await _safe(() async {
-			await ScreenshotService.instance.captureAndUpload(requestId: requestId);
+			await ScreenshotService.instance.captureAndUpload(
+				requestId: requestId,
+				displayTarget: displayTarget,
+			);
 			SocketEventBus.instance.emit(SocketEvent.screenshotRequested, data);
 			AppLogger.screenshotEvent('Step 3 DONE — event="$event" handled');
 		});

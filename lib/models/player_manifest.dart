@@ -84,6 +84,8 @@ class PlayerManifest {
 	final List<ManifestMediaItem> media;
 	/// Secondary display content for PHOENIX devices. Null for all other device types.
 	final SecondaryDisplay? secondaryDisplay;
+	/// PHOENIX display mode: 'mirror', 'enhanced', or 'default_media'. Empty for non-PHOENIX devices.
+	final String displayMode;
 
 	const PlayerManifest({
 		this.displayId,
@@ -96,6 +98,7 @@ class PlayerManifest {
 		this.schedule,
 		required this.media,
 		this.secondaryDisplay,
+		this.displayMode = '',
 	});
 
 	factory PlayerManifest.fromJson(Map<String, dynamic> json) {
@@ -117,6 +120,7 @@ class PlayerManifest {
 			secondaryDisplay: secondaryJson != null
 				? SecondaryDisplay.fromJson(secondaryJson)
 				: null,
+			displayMode: data['displayMode'] as String? ?? '',
 		);
 	}
 }

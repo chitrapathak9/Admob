@@ -51,6 +51,8 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   // ── Secondary display (PHOENIX dual-zone via HDMI) ────────────────────────
   List<ManifestMediaItem> _secondaryMedia = [];
   bool _secondaryDisplayActive = false;
+  // 'mirror' | 'enhanced' | 'default_media' — empty for non-PHOENIX devices.
+  String _displayMode = '';
 
   bool _isLoading = true;
   String _loadingMessage = 'Connecting to server...';
@@ -172,6 +174,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _manifestHash = manifest.manifestHash;
       _mediaTotal = manifest.media.length;
       _zoneCount = manifest.zoneCount;
+      _displayMode = manifest.displayMode;
       await StorageService.instance.saveManifestHash(manifest.manifestHash);
 
       if (manifest.media.isEmpty) {
@@ -432,10 +435,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       );
       final newPlaylist = await _buildPlaylistFromManifest(manifest);
 
+      final previousDisplayMode = _displayMode;
       _manifestHash = manifest.manifestHash;
       _mediaTotal = manifest.media.length;
       _mediaReady = newPlaylist.length;
       _zoneCount = manifest.zoneCount;
+      _displayMode = manifest.displayMode;
       await StorageService.instance.saveManifestHash(manifest.manifestHash);
 
       if (!mounted || newPlaylist.isEmpty) return;
@@ -445,11 +450,16 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         _noContentTimer?.cancel();
       }
 
-      if (!_playlistEquals(_playlist, newPlaylist)) {
+      final playlistChanged = !_playlistEquals(_playlist, newPlaylist);
+      final modeChanged     = _displayMode != previousDisplayMode;
+
+      if (playlistChanged || modeChanged) {
         setState(() {
           _playlist = newPlaylist;
-          _currentIndex = 0;
-          _slideKey++;
+          if (playlistChanged) {
+            _currentIndex = 0;
+            _slideKey++;
+          }
           _isLoading = false;
           _errorMessage = null;
         });
@@ -841,11 +851,19 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   Widget _buildPlayerUi() {
     final item = _playlist[_currentIndex % _playlist.length];
 
-    // PHOENIX fallback — no HDMI connected: render the same slide in two equal
-    // halves so content fills both physical panels simultaneously.
-    // When HDMI is active, the secondary engine handles panel 2 independently
-    // via DisplayManagerService, so the primary renders full-screen here.
-    if (_zoneCount >= 2 && !_secondaryDisplayActive) {
+    // PHOENIX — two-halves layout: only active in mirror mode when no HDMI
+    // secondary is running. Mirror mode sends the same media list for both
+    // panels, so panel 2 is handled by the secondary engine when HDMI is
+    // connected (_secondaryDisplayActive = true) and falls back to two halves
+    // on the primary when no HDMI is present.
+    // Enhanced / default_media modes never use two halves — each panel has
+    // independent content and the secondary engine always drives panel 2.
+    // The _displayMode.isEmpty guard preserves old behaviour for devices on a
+    // backend that predates the displayMode field.
+    final bool isMirrorFallback = _zoneCount >= 2 &&
+        !_secondaryDisplayActive &&
+        (_displayMode == 'mirror' || _displayMode.isEmpty);
+    if (isMirrorFallback) {
       return Scaffold(
         backgroundColor: AppConfig.background,
         body: Stack(
