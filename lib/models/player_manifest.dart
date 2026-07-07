@@ -86,6 +86,10 @@ class PlayerManifest {
 	final SecondaryDisplay? secondaryDisplay;
 	/// PHOENIX display mode: 'mirror', 'enhanced', or 'default_media'. Empty for non-PHOENIX devices.
 	final String displayMode;
+	/// Software "screen off" — true when this display should render blank instead
+	/// of content (manual toggle or an active blank schedule). The player itself
+	/// keeps running normally (heartbeats, polling, sockets); only rendering changes.
+	final bool blanked;
 
 	const PlayerManifest({
 		this.displayId,
@@ -99,6 +103,7 @@ class PlayerManifest {
 		required this.media,
 		this.secondaryDisplay,
 		this.displayMode = '',
+		this.blanked = false,
 	});
 
 	factory PlayerManifest.fromJson(Map<String, dynamic> json) {
@@ -121,6 +126,7 @@ class PlayerManifest {
 				? SecondaryDisplay.fromJson(secondaryJson)
 				: null,
 			displayMode: data['displayMode'] as String? ?? '',
+			blanked: data['blanked'] as bool? ?? false,
 		);
 	}
 }

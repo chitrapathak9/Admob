@@ -338,6 +338,9 @@ enum SocketEvent {
   /// Fired by [DisplayManagerService] when a physical display is connected or
   /// disconnected. Payload is the updated `List<Display>` from the OS.
   displayChanged,
+  /// Manual or schedule-driven blank toggle pushed from the backend. Payload:
+  /// `{ isBlanked: bool }`. Applied immediately — no manifest refetch needed.
+  screenBlankState,
 }
 
 class SocketEventBus {

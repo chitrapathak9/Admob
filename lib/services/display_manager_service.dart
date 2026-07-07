@@ -207,6 +207,21 @@ class DisplayManagerService {
     }
   }
 
+  /// Mirror the primary screen's blank state onto the secondary display.
+  /// No-ops silently when [secondaryActive] is false — safe to call
+  /// unconditionally whenever the primary's blank state changes.
+  Future<void> pushBlankToSecondary(bool isBlanked) async {
+    if (!_secondaryActive) return;
+    try {
+      await _display.transferDataToPresentation({
+        'action'   : 'setBlanked',
+        'isBlanked': isBlanked,
+      });
+    } catch (e) {
+      debugPrint('[DisplayManager] pushBlankToSecondary error: $e');
+    }
+  }
+
   /// Tell the secondary engine whether its content is portrait-mastered so it
   /// can apply a [RotatedBox] when screen and content orientation diverge.
   Future<void> pushOrientationToSecondary({required bool isPortrait}) async {

@@ -54,6 +54,12 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
   // 'mirror' | 'enhanced' | 'default_media' — empty for non-PHOENIX devices.
   String _displayMode = '';
 
+  // ── Blank / Power control ──────────────────────────────────────────────────
+  // Software "screen off": everything (heartbeat, downloads, sockets) keeps
+  // running normally — only the on-screen render is replaced with black,
+  // via a Stack overlay in build() so no player/video state is torn down.
+  bool _isBlanked = false;
+
   bool _isLoading = true;
   String _loadingMessage = 'Connecting to server...';
   String? _errorMessage;
@@ -102,6 +108,15 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     bus.on(SocketEvent.reconnected, _handleSocketContentChange);
     bus.on(SocketEvent.deviceNotRegistered, _handleDeviceNotRegistered);
     bus.on(SocketEvent.displayChanged, _handleDisplayChanged);
+    bus.on(SocketEvent.screenBlankState, _handleScreenBlankState);
+  }
+
+  void _handleScreenBlankState(dynamic data) {
+    if (!mounted) return;
+    final isBlanked = data is Map && data['isBlanked'] is bool ? data['isBlanked'] as bool : null;
+    if (isBlanked == null || isBlanked == _isBlanked) return;
+    setState(() => _isBlanked = isBlanked);
+    unawaited(DisplayManagerService.instance.pushBlankToSecondary(isBlanked));
   }
 
   void _handleDeviceNotRegistered(dynamic _) {
@@ -141,6 +156,9 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
     // pushOrientationToSecondary needed. Each slide reads its own orientation
     // and compares it to the secondary screen's MediaQuery independently.
     await dm.pushMediaToSecondary(media);
+    // A freshly launched/relaunched engine starts unblanked by default —
+    // sync it to the primary's current state immediately.
+    await dm.pushBlankToSecondary(_isBlanked);
     if (mounted) setState(() => _secondaryDisplayActive = true);
   }
 
@@ -175,6 +193,7 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       _mediaTotal = manifest.media.length;
       _zoneCount = manifest.zoneCount;
       _displayMode = manifest.displayMode;
+      _isBlanked = manifest.blanked;
       await StorageService.instance.saveManifestHash(manifest.manifestHash);
 
       if (manifest.media.isEmpty) {
@@ -393,6 +412,17 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
       final previousHash = _manifestHash.isNotEmpty
           ? _manifestHash
           : (await StorageService.instance.loadManifestHash()) ?? '';
+
+      // Sync blank state on every fetch, unconditionally — it's orthogonal to
+      // content and must not depend on the manifestHash early-return below.
+      if (manifest.blanked != _isBlanked) {
+        if (mounted) {
+          setState(() => _isBlanked = manifest.blanked);
+        } else {
+          _isBlanked = manifest.blanked;
+        }
+        unawaited(DisplayManagerService.instance.pushBlankToSecondary(_isBlanked));
+      }
 
       if (manifest.media.isEmpty) {
         if (_playlist.isEmpty && mounted) {
@@ -631,7 +661,16 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
         if (didPop) return;
         _showDeviceInfo();
       },
-      child: _buildBody(),
+      // Blank is a pure render-layer overlay — everything underneath (video
+      // decode, downloads, heartbeat, sockets) keeps running untouched, so
+      // un-blanking is instant with no re-init flash.
+      child: Stack(
+        children: [
+          _buildBody(),
+          if (_isBlanked)
+            const Positioned.fill(child: ColoredBox(color: Colors.black)),
+        ],
+      ),
     );
   }
 

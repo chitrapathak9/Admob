@@ -48,6 +48,7 @@ class SocketEventHandler {
 		_onContentUpdated();
 		_onScheduleActivated();
 		_onSchedulePaused();
+		_onScreenBlankState();
 		_onScreenshotRequested();
 		_onWrappedScreenEvents();
 		_onScreenshotCatchAll();
@@ -66,6 +67,7 @@ class SocketEventHandler {
 		_socketService.off('content:updated');
 		_socketService.off('schedule:activated');
 		_socketService.off('schedule:paused');
+		_socketService.off('screen:blank-state');
 		_socketService.off('screen:storage:info:request');
 		_socketService.off('screen:storage:clear:request');
 		_socketService.off('get_display_count');
@@ -134,6 +136,15 @@ class SocketEventHandler {
 			await _safe(() async {
 				await _xmdsService.getSchedule();
 				SocketEventBus.instance.emit(SocketEvent.schedulePaused, data);
+			});
+		});
+	}
+
+	void _onScreenBlankState() {
+		_socketService.on('screen:blank-state', (data) async {
+			AppLogger.socketEventReceived('screen:blank-state', data);
+			await _safe(() async {
+				SocketEventBus.instance.emit(SocketEvent.screenBlankState, data);
 			});
 		});
 	}

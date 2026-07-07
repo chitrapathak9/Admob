@@ -53,6 +53,9 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
   List<_MediaEntry> _playlist = [];
   int _currentIndex = 0;
   int _slideKey = 0;
+  // Mirrors the primary engine's blank state — pushed via 'setBlanked'.
+  // Same render-overlay approach: playback keeps running underneath.
+  bool _isBlanked = false;
 
   @override
   void initState() {
@@ -74,6 +77,12 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
       // now embedded per-item in setMedia — this branch is a no-op.
       case 'setOrientation':
         debugPrint('[Secondary] setOrientation received (ignored — orientation is per-item)');
+
+      case 'setBlanked':
+        final blanked = msg['isBlanked'] as bool? ?? false;
+        if (blanked != _isBlanked && mounted) {
+          setState(() => _isBlanked = blanked);
+        }
 
       case 'takeScreenshot':
         final requestId = msg['requestId'] as String?;
@@ -236,15 +245,21 @@ class _SecondaryPlayerAppState extends State<SecondaryPlayerApp> {
         // _OrientationWrapper is applied PER SLIDE so each item uses its
         // own content orientation vs the secondary screen's physical
         // orientation, read fresh from MediaQuery on every rebuild.
-        body: RepaintBoundary(
-          key: _repaintKey,
-          child: _OrientationWrapper(
-            isPortraitContent: entry.isPortraitContent,
-            child: KeyedSubtree(
-              key: ValueKey<int>(_slideKey),
-              child: _buildSlide(entry),
+        body: Stack(
+          children: [
+            RepaintBoundary(
+              key: _repaintKey,
+              child: _OrientationWrapper(
+                isPortraitContent: entry.isPortraitContent,
+                child: KeyedSubtree(
+                  key: ValueKey<int>(_slideKey),
+                  child: _buildSlide(entry),
+                ),
+              ),
             ),
-          ),
+            if (_isBlanked)
+              const Positioned.fill(child: ColoredBox(color: Colors.black)),
+          ],
         ),
       ),
     );
