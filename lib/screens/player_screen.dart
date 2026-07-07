@@ -395,7 +395,13 @@ class _PlayerScreenState extends State<PlayerScreen> with WidgetsBindingObserver
           : (await StorageService.instance.loadManifestHash()) ?? '';
 
       if (manifest.media.isEmpty) {
-        if (_playlist.isEmpty && mounted) {
+        // Trigger whenever we're not ALREADY correctly showing no-content —
+        // covers both "just went empty while playing" (the bug: previously
+        // only checked _playlist.isEmpty, so a screen actively playing kept
+        // looping its stale cached playlist forever once content disappeared
+        // — e.g. its display group was paused/deleted, or its campaign ended)
+        // and "first-ever empty response before _noContent was set".
+        if (mounted && (_playlist.isNotEmpty || !_noContent)) {
           _enterNoContentState();
         }
         return;
